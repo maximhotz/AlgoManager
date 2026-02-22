@@ -57,7 +57,6 @@ def calculate_volatility_tp(ticks_array, limits):
     return float(max(limits.get('min_tp_points', 0.5), min((high - low) * multiplier, limits.get('max_tp_points', 5.0))))
 
 def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, percentile, time_slice_minutes):
-    # --- THE FIX: Anchor calibration to Server Time, NOT PC Time ---
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
@@ -121,14 +120,12 @@ def run_speed_engine():
     FALLBACK_THRESHOLD = PARAMS['fallback_threshold']
     USE_DYNAMIC_THRESHOLD = PARAMS.get('use_dynamic_threshold', False)
     
-    # Calibration
     CALIB_CONF = PARAMS.get('calibration', {})
     CALIB_DAYS = CALIB_CONF.get('lookback_days', 10)
     CALIB_PERCENTILE = CALIB_CONF.get('percentile', 0.95)
     CALIB_INTERVAL_MIN = CALIB_CONF.get('recalibrate_minutes', 2) 
     CALIB_SLICE_MIN = CALIB_CONF.get('time_slice_minutes', 30)
     
-    # RSI
     USE_RSI = PARAMS.get('use_rsi_filter', False)
     RSI_PERIOD = PARAMS.get('rsi_period', 14)
     RSI_UPPER = PARAMS.get('rsi_upper', 65) 
@@ -136,7 +133,6 @@ def run_speed_engine():
     RSI_ANCHOR_MINUTES = PARAMS.get('rsi_rolling_window_minutes', 60)
     SELECTED_TF = mt5.TIMEFRAME_M1
     
-    # Dynamic Sizing
     DYN_CONF = PARAMS.get('dynamic_sizing', {})
     USE_DYN_SIZE = DYN_CONF.get('enabled', False)
     SKEW_LOOKBACK = DYN_CONF.get('lookback_minutes', 60)
@@ -149,6 +145,9 @@ def run_speed_engine():
     RUNAWAY_THR = DYN_CONF.get('runaway_zone', {}).get('skew_threshold', 10)
     RUNAWAY_WITH_TREND = DYN_CONF.get('runaway_zone', {}).get('with_trend_volume', 0.12)
     RUNAWAY_FADE_TREND = DYN_CONF.get('runaway_zone', {}).get('fade_trend_volume', 0.0)
+
+    # --- PROGRESSIVE COOLDOWN CONFIG ---
+    PROG_COOLDOWN_CONF = PARAMS.get('progressive_cooldown', {})
 
     TRADE_LIMITS = my_conf['trade_limits']
     USE_VOL_TP = TRADE_LIMITS.get('use_volatility_based_tp', False)
@@ -205,7 +204,6 @@ def run_speed_engine():
 
     try:
         while True:
-            # Recalibration Logic
             if USE_DYNAMIC_THRESHOLD and (time.time() - last_calibration_time > RECALIBRATE_INTERVAL_SEC):
                 new_threshold = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
                 if new_threshold: FALLBACK_THRESHOLD = new_threshold
@@ -317,6 +315,29 @@ def run_speed_engine():
                                 print(f"\n[{ts}] 🛑 SIGNAL BLOCKED: {action} blocked by {skew_state} protective filter.", flush=True)
 
                             if is_valid:
+                                # --- PROGRESSIVE COOLDOWN LOGIC (Independent Window) ---
+                                effective_cooldown = COOLDOWN_SEC
+                                same_dir_count = 0
+                                
+                                if PROG_COOLDOWN_CONF.get('enabled', False):
+                                    cooldown_lookback = PROG_COOLDOWN_CONF.get('lookback_minutes', 60)
+                                    # Convert current millisecond tick to Server seconds
+                                    cutoff_time = (current_msc / 1000.0) - (cooldown_lookback * 60)
+                                    
+                                    open_positions = mt5.positions_get(symbol=SYMBOL)
+                                    if open_positions:
+                                        target_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
+                                        for p in open_positions:
+                                            # Ensure we match strategy, direction, AND the isolated lookback window
+                                            if p.magic == MAGIC and p.type == target_type and p.time >= cutoff_time:
+                                                same_dir_count += 1
+                                                
+                                    tiers = sorted(PROG_COOLDOWN_CONF.get('tiers', []), key=lambda x: x['open_trades'], reverse=True)
+                                    for tier in tiers:
+                                        if same_dir_count >= tier['open_trades']:
+                                            effective_cooldown = tier['cooldown_sec']
+                                            break
+
                                 tp = calculate_volatility_tp(ticks, TRADE_LIMITS) if USE_VOL_TP else TP_POINTS
                                 signal_count += 1
                                 
@@ -338,6 +359,13 @@ def run_speed_engine():
                                     print(f"Recent Skew: {skew:+d} (Stranded L: {recent_longs} | S: {recent_shorts})")
                                 print(f"Volume:      {target_vol:.2f} lots")
                                 print(f"Dynamic TP:  {tp:.2f} points")
+                                
+                                # Dynamic Output for Progressive Cooldown
+                                if PROG_COOLDOWN_CONF.get('enabled', False):
+                                    print(f"Cooldown:    {effective_cooldown}s (Open in last {PROG_COOLDOWN_CONF.get('lookback_minutes', 60)}m: {same_dir_count})")
+                                else:
+                                    print(f"Cooldown:    {effective_cooldown}s (Static)")
+                                
                                 print("="*55 + "\n", flush=True)
                                 
                                 payload = {
@@ -354,7 +382,7 @@ def run_speed_engine():
                                     socket.close()
                                     socket = connect_zmq()
                                 
-                                time.sleep(COOLDOWN_SEC)
+                                time.sleep(effective_cooldown)
                                 break 
 
             time.sleep(0.005)

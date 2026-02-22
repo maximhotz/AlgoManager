@@ -48,6 +48,14 @@
             "with_trend_volume": 0.06,
             "fade_trend_volume": 0.00
           }
+        },
+        "progressive_cooldown": {
+          "enabled": true,
+          "lookback_minutes": 60,
+          "tiers": [
+            {"open_trades": 10, "cooldown_sec": 30},
+            {"open_trades": 5, "cooldown_sec": 15}
+          ]
         }
       },
       "trade_limits": {
