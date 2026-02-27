@@ -30,6 +30,7 @@
         "rsi_rolling_window_minutes": 60,
         "calibration": {
           "lookback_days": 10,
+          "short_lookback_days": 3,
           "percentile": 0.95,
           "recalibrate_minutes": 2,
           "time_slice_minutes": 10

@@ -56,31 +56,46 @@ def calculate_volatility_tp(ticks_array, limits):
     multiplier = limits.get('tp_volatility_multiplier', 0.5)
     return float(max(limits.get('min_tp_points', 0.5), min((high - low) * multiplier, limits.get('max_tp_points', 5.0))))
 
-def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, percentile, time_slice_minutes):
+# --- NEW ADAPTIVE VOLATILITY CLAMP ---
+def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, short_lookback_days, percentile, time_slice_minutes):
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
         
     server_now = datetime.fromtimestamp(tick.time)
-    deltas = []
+    
+    deltas_long = []
+    deltas_short = []
     
     for i in range(lookback_days):
         target_time = server_now - timedelta(days=i)
         slice_start = target_time - timedelta(minutes=time_slice_minutes)
         slice_end = target_time + timedelta(minutes=time_slice_minutes)
         ticks = mt5.copy_ticks_range(symbol, slice_start, slice_end, mt5.COPY_TICKS_ALL)
+        
         if ticks is not None and len(ticks) > 10:
             df = pd.DataFrame(ticks)
             df['time'] = pd.to_datetime(df['time'], unit='s')
             window_str = f"{time_window_sec}s"
             df['window'] = df['time'].dt.floor(window_str)
+            
+            day_deltas = []
             for window, group in df.groupby('window'):
                 if len(group) > 1:
-                    delta = abs(group['ask'].iloc[-1] - group['ask'].iloc[0])
-                    deltas.append(delta)
-    if not deltas: return None
-    deltas_series = pd.Series(deltas)
-    return float(deltas_series.quantile(percentile))
+                    day_deltas.append(abs(group['ask'].iloc[-1] - group['ask'].iloc[0]))
+            
+            deltas_long.extend(day_deltas)
+            # If this data is from the most recent N days, add it to the short array too
+            if i < short_lookback_days:
+                deltas_short.extend(day_deltas)
+                
+    if not deltas_long: return None
+    
+    long_threshold = float(pd.Series(deltas_long).quantile(percentile))
+    short_threshold = float(pd.Series(deltas_short).quantile(percentile)) if deltas_short else long_threshold
+    
+    # Return the Max of the two to prevent over-trading in sudden high volatility
+    return max(long_threshold, short_threshold)
 
 def get_inventory_skew(symbol, magic, lookback_minutes):
     positions = mt5.positions_get(symbol=symbol)
@@ -122,6 +137,7 @@ def run_speed_engine():
     
     CALIB_CONF = PARAMS.get('calibration', {})
     CALIB_DAYS = CALIB_CONF.get('lookback_days', 10)
+    CALIB_SHORT_DAYS = CALIB_CONF.get('short_lookback_days', 3) # Extracted new config
     CALIB_PERCENTILE = CALIB_CONF.get('percentile', 0.95)
     CALIB_INTERVAL_MIN = CALIB_CONF.get('recalibrate_minutes', 2) 
     CALIB_SLICE_MIN = CALIB_CONF.get('time_slice_minutes', 30)
@@ -157,10 +173,11 @@ def run_speed_engine():
     if not mt5.symbol_select(SYMBOL, True): sys.exit(1)
 
     if USE_DYNAMIC_THRESHOLD:
-        print(f"init Sniper Calibration (Days:{CALIB_DAYS}, Slice:+/-{CALIB_SLICE_MIN}m)...", end="", flush=True)
+        print(f"init Sniper Calibration (Days:{CALIB_DAYS}/{CALIB_SHORT_DAYS}, Slice:+/-{CALIB_SLICE_MIN}m)...", end="", flush=True)
         calib_success = False
         for attempt in range(10):
-            calibrated = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
+            # Pass both lookbacks here
+            calibrated = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_SHORT_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
             if calibrated: 
                 FALLBACK_THRESHOLD = calibrated
                 print(f" Done. Thr: {FALLBACK_THRESHOLD:.5f}")
@@ -205,7 +222,8 @@ def run_speed_engine():
     try:
         while True:
             if USE_DYNAMIC_THRESHOLD and (time.time() - last_calibration_time > RECALIBRATE_INTERVAL_SEC):
-                new_threshold = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
+                # Pass both lookbacks here
+                new_threshold = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_SHORT_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
                 if new_threshold: FALLBACK_THRESHOLD = new_threshold
                 last_calibration_time = time.time()
                 gc.collect() 
