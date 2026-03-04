@@ -22,12 +22,11 @@
         "cooldown_sec": 5,
         "use_dynamic_threshold": true,
         "fallback_threshold": 0.5,
-        "use_rsi_filter": false,
-        "rsi_period": 14,
-        "rsi_upper": 65,
-        "rsi_lower": 35,
-        "rsi_timeframe": "M1",
-        "rsi_rolling_window_minutes": 60,
+        "efficiency_filter": {
+          "enabled": true,
+          "lookback_minutes": 15,
+          "threshold": 0.35
+        },
         "calibration": {
           "lookback_days": 10,
           "short_lookback_days": 3,

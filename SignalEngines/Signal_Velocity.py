@@ -29,15 +29,16 @@ def load_config():
         data = json.load(f)
         return data['strategies'][MY_STRATEGY_ID], data['system']
 
-def calculate_rsi_series(prices, period=14):
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).fillna(0)
-    loss = (-delta.where(delta < 0, 0)).fillna(0)
-    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+# --- NEW: KAUFMAN EFFICIENCY RATIO ---
+def calculate_efficiency_ratio(df_rates):
+    if len(df_rates) < 2: return 0.0, 0.0
+    # Net Direction: Absolute difference between first and last close
+    net_direction = df_rates['close'].iloc[-1] - df_rates['close'].iloc[0]
+    # Total Path Length: Sum of all absolute 1-minute close-to-close movements
+    path_length = df_rates['close'].diff().abs().sum()
+    
+    er = abs(net_direction) / path_length if path_length > 0 else 0.0
+    return er, net_direction
 
 def calculate_volatility_tp(ticks_array, limits):
     if not limits.get('use_volatility_based_tp', False): return limits.get('tp_points', 1.0)
@@ -56,7 +57,6 @@ def calculate_volatility_tp(ticks_array, limits):
     multiplier = limits.get('tp_volatility_multiplier', 0.5)
     return float(max(limits.get('min_tp_points', 0.5), min((high - low) * multiplier, limits.get('max_tp_points', 5.0))))
 
-# --- NEW ADAPTIVE VOLATILITY CLAMP ---
 def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, short_lookback_days, percentile, time_slice_minutes):
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
@@ -85,7 +85,6 @@ def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, sh
                     day_deltas.append(abs(group['ask'].iloc[-1] - group['ask'].iloc[0]))
             
             deltas_long.extend(day_deltas)
-            # If this data is from the most recent N days, add it to the short array too
             if i < short_lookback_days:
                 deltas_short.extend(day_deltas)
                 
@@ -94,7 +93,6 @@ def calibrate_time_specific_threshold(symbol, time_window_sec, lookback_days, sh
     long_threshold = float(pd.Series(deltas_long).quantile(percentile))
     short_threshold = float(pd.Series(deltas_short).quantile(percentile)) if deltas_short else long_threshold
     
-    # Return the Max of the two to prevent over-trading in sudden high volatility
     return max(long_threshold, short_threshold)
 
 def get_inventory_skew(symbol, magic, lookback_minutes):
@@ -137,17 +135,16 @@ def run_speed_engine():
     
     CALIB_CONF = PARAMS.get('calibration', {})
     CALIB_DAYS = CALIB_CONF.get('lookback_days', 10)
-    CALIB_SHORT_DAYS = CALIB_CONF.get('short_lookback_days', 3) # Extracted new config
+    CALIB_SHORT_DAYS = CALIB_CONF.get('short_lookback_days', 3) 
     CALIB_PERCENTILE = CALIB_CONF.get('percentile', 0.95)
     CALIB_INTERVAL_MIN = CALIB_CONF.get('recalibrate_minutes', 2) 
     CALIB_SLICE_MIN = CALIB_CONF.get('time_slice_minutes', 30)
     
-    USE_RSI = PARAMS.get('use_rsi_filter', False)
-    RSI_PERIOD = PARAMS.get('rsi_period', 14)
-    RSI_UPPER = PARAMS.get('rsi_upper', 65) 
-    RSI_LOWER = PARAMS.get('rsi_lower', 35) 
-    RSI_ANCHOR_MINUTES = PARAMS.get('rsi_rolling_window_minutes', 60)
-    SELECTED_TF = mt5.TIMEFRAME_M1
+    # --- EFFICIENCY CONFIG ---
+    EFF_CONF = PARAMS.get('efficiency_filter', {})
+    USE_EFFICIENCY = EFF_CONF.get('enabled', False)
+    EFF_LOOKBACK_MIN = EFF_CONF.get('lookback_minutes', 15)
+    EFF_THRESHOLD = EFF_CONF.get('threshold', 0.35)
     
     DYN_CONF = PARAMS.get('dynamic_sizing', {})
     USE_DYN_SIZE = DYN_CONF.get('enabled', False)
@@ -162,7 +159,6 @@ def run_speed_engine():
     RUNAWAY_WITH_TREND = DYN_CONF.get('runaway_zone', {}).get('with_trend_volume', 0.12)
     RUNAWAY_FADE_TREND = DYN_CONF.get('runaway_zone', {}).get('fade_trend_volume', 0.0)
 
-    # --- PROGRESSIVE COOLDOWN CONFIG ---
     PROG_COOLDOWN_CONF = PARAMS.get('progressive_cooldown', {})
 
     TRADE_LIMITS = my_conf['trade_limits']
@@ -176,7 +172,6 @@ def run_speed_engine():
         print(f"init Sniper Calibration (Days:{CALIB_DAYS}/{CALIB_SHORT_DAYS}, Slice:+/-{CALIB_SLICE_MIN}m)...", end="", flush=True)
         calib_success = False
         for attempt in range(10):
-            # Pass both lookbacks here
             calibrated = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_SHORT_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
             if calibrated: 
                 FALLBACK_THRESHOLD = calibrated
@@ -195,21 +190,23 @@ def run_speed_engine():
     def connect_zmq():
         s = context.socket(zmq.REQ)
         s.connect(f"tcp://{zmq_host}:{zmq_port}")
-        s.setsockopt(zmq.RCVTIMEO, 2000) 
+        s.setsockopt(zmq.RCVTIMEO, 5000) # FIXED: 5000ms ensures no timeout on US Open
         s.setsockopt(zmq.LINGER, 0)
         return s
 
     socket = connect_zmq()
     print(f"✓ ZMQ connected. Strategy: {MY_STRATEGY_ID}")
-    print(f"✓ SPEED: HFT Millisecond Core | DYNAMIC SIZING: {'ON' if USE_DYN_SIZE else 'OFF'}")
+    print(f"✓ EFFICIENCY FILTER: {'ON' if USE_EFFICIENCY else 'OFF'} | DYNAMIC SIZING: {'ON' if USE_DYN_SIZE else 'OFF'}")
 
     last_processed_tick_msc = 0
     last_slow_check = 0
     last_calibration_time = time.time()
     RECALIBRATE_INTERVAL_SEC = CALIB_INTERVAL_MIN * 60
 
-    current_rsi = 50.0
-    anchor_rsi = 50.0 
+    current_er = 0.0
+    macro_direction = 0.0
+    er_regime = "CHOP/RANGE"
+    
     skew = 0
     recent_longs = 0
     recent_shorts = 0
@@ -222,7 +219,6 @@ def run_speed_engine():
     try:
         while True:
             if USE_DYNAMIC_THRESHOLD and (time.time() - last_calibration_time > RECALIBRATE_INTERVAL_SEC):
-                # Pass both lookbacks here
                 new_threshold = calibrate_time_specific_threshold(SYMBOL, TIME_WINDOW_SEC, CALIB_DAYS, CALIB_SHORT_DAYS, CALIB_PERCENTILE, CALIB_SLICE_MIN)
                 if new_threshold: FALLBACK_THRESHOLD = new_threshold
                 last_calibration_time = time.time()
@@ -256,14 +252,18 @@ def run_speed_engine():
                     # --- SLOW CHECKS ---
                     if i == len(new_ticks) - 1:
                         if time.time() - last_slow_check > 2:
-                            if USE_RSI:
-                                fetch_count = max(100, RSI_ANCHOR_MINUTES + 10)
-                                rates = mt5.copy_rates_from_pos(SYMBOL, SELECTED_TF, 0, fetch_count)
-                                if rates is not None and len(rates) > RSI_PERIOD:
+                            
+                            # Calculate ER
+                            if USE_EFFICIENCY:
+                                rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M1, 0, EFF_LOOKBACK_MIN)
+                                if rates is not None and len(rates) > 2:
                                     df_rates = pd.DataFrame(rates)
-                                    rsi_series = calculate_rsi_series(df_rates['close'], RSI_PERIOD)
-                                    current_rsi = rsi_series.iloc[-1]
-                                    anchor_rsi = rsi_series.iloc[-min(len(rsi_series)-1, RSI_ANCHOR_MINUTES)]
+                                    current_er, macro_direction = calculate_efficiency_ratio(df_rates)
+                                    
+                                    if current_er >= EFF_THRESHOLD:
+                                        er_regime = "TREND UP (Block Shorts)" if macro_direction > 0 else "TREND DOWN (Block Buys)"
+                                    else:
+                                        er_regime = "CHOP/RANGE (Allow Both)"
                             
                             if USE_DYN_SIZE:
                                 skew, recent_longs, recent_shorts = get_inventory_skew(SYMBOL, MAGIC, SKEW_LOOKBACK)
@@ -304,33 +304,39 @@ def run_speed_engine():
 
                         delta = tick_end['ask'] - tick_start['ask']
                         
-                        if USE_RSI:
-                            bias = "NEUTRAL (Block)"
-                            if anchor_rsi > RSI_UPPER: bias = "HOT (Allow Sell)"
-                            elif anchor_rsi < RSI_LOWER: bias = "COLD (Allow Buy)"
-                            rsi_txt = f"Curr:{current_rsi:.1f} | Past(-{RSI_ANCHOR_MINUTES}m):{anchor_rsi:.1f} [{bias}]"
+                        if USE_EFFICIENCY:
+                            er_txt = f"ER:{current_er:.2f} [{er_regime}]"
                         else:
-                            rsi_txt = "OFF"
+                            er_txt = "EFF: OFF"
                             
-                        skew_txt = f"Skew:{skew:+d} (L:{recent_longs} S:{recent_shorts}) [{skew_state}]" if USE_DYN_SIZE else "Size: STATIC"
+                        skew_txt = f"Skew:{skew:+d} [{skew_state}]" if USE_DYN_SIZE else "Size: STATIC"
                         
                         if i == len(new_ticks) - 1:
-                            print(f"Thr:{FALLBACK_THRESHOLD:.3f} | Speed:{delta:+.3f} | {rsi_txt} | {skew_txt}       ", end='\r', flush=True)
+                            print(f"Thr:{FALLBACK_THRESHOLD:.3f} | Vel:{delta:+.3f} | {er_txt} | {skew_txt}       ", end='\r', flush=True)
 
                         if abs(delta) > FALLBACK_THRESHOLD:
                             action = "SELL" if delta > 0 else "BUY"
                             is_valid = True 
+                            block_reason = ""
                             
-                            if USE_RSI:
-                                if action == "SELL" and anchor_rsi <= RSI_UPPER: is_valid = False
-                                elif action == "BUY" and anchor_rsi >= RSI_LOWER: is_valid = False
+                            # --- APPLY ER FILTER ---
+                            if USE_EFFICIENCY and current_er >= EFF_THRESHOLD:
+                                if action == "SELL" and macro_direction > 0:
+                                    is_valid = False
+                                    block_reason = "Blocked by Upward Trend (ER)"
+                                elif action == "BUY" and macro_direction < 0:
+                                    is_valid = False
+                                    block_reason = "Blocked by Downward Trend (ER)"
 
                             target_vol = buy_vol if action == "BUY" else sell_vol
                             
                             if target_vol <= 0.0:
                                 is_valid = False
+                                block_reason = f"Blocked by {skew_state} sizing rule"
+                                
+                            if not is_valid and block_reason:
                                 ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                                print(f"\n[{ts}] 🛑 SIGNAL BLOCKED: {action} blocked by {skew_state} protective filter.", flush=True)
+                                print(f"\n[{ts}] 🛑 SIGNAL BLOCKED: {action} - {block_reason}", flush=True)
 
                             if is_valid:
                                 # --- PROGRESSIVE COOLDOWN LOGIC (Independent Window) ---
@@ -339,14 +345,12 @@ def run_speed_engine():
                                 
                                 if PROG_COOLDOWN_CONF.get('enabled', False):
                                     cooldown_lookback = PROG_COOLDOWN_CONF.get('lookback_minutes', 60)
-                                    # Convert current millisecond tick to Server seconds
                                     cutoff_time = (current_msc / 1000.0) - (cooldown_lookback * 60)
                                     
                                     open_positions = mt5.positions_get(symbol=SYMBOL)
                                     if open_positions:
                                         target_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
                                         for p in open_positions:
-                                            # Ensure we match strategy, direction, AND the isolated lookback window
                                             if p.magic == MAGIC and p.type == target_type and p.time >= cutoff_time:
                                                 same_dir_count += 1
                                                 
@@ -370,15 +374,14 @@ def run_speed_engine():
                                 print(f"End Price:   {tick_end['ask']:.3f} (at {t_end_str})")
                                 print(f"Math:        {tick_end['ask']:.3f} - {tick_start['ask']:.3f} = {delta:+.3f}")
                                 print(f"Threshold:   {FALLBACK_THRESHOLD:.3f} (Valid: {abs(delta):.3f} > {FALLBACK_THRESHOLD:.3f})")
-                                if USE_RSI:
-                                    print(f"Anchor RSI:  {anchor_rsi:.1f} (Allowed: {'<' if action=='BUY' else '>'} {RSI_LOWER if action=='BUY' else RSI_UPPER})")
+                                if USE_EFFICIENCY:
+                                    print(f"Path Efficiency: {current_er:.2f} (Regime: {er_regime})")
                                 if USE_DYN_SIZE:
                                     print(f"Skew State:  {skew_state}")
                                     print(f"Recent Skew: {skew:+d} (Stranded L: {recent_longs} | S: {recent_shorts})")
                                 print(f"Volume:      {target_vol:.2f} lots")
                                 print(f"Dynamic TP:  {tp:.2f} points")
                                 
-                                # Dynamic Output for Progressive Cooldown
                                 if PROG_COOLDOWN_CONF.get('enabled', False):
                                     print(f"Cooldown:    {effective_cooldown}s (Open in last {PROG_COOLDOWN_CONF.get('lookback_minutes', 60)}m: {same_dir_count})")
                                 else:
@@ -389,7 +392,7 @@ def run_speed_engine():
                                 payload = {
                                     "strategy_id": MY_STRATEGY_ID, "symbol": SYMBOL, "action": action, 
                                     "dynamic_tp": tp, "volume": target_vol,
-                                    "extra_metrics": {"rsi": current_rsi, "speed": delta, "magic": MAGIC, "skew": skew}
+                                    "extra_metrics": {"er": current_er, "speed": delta, "magic": MAGIC, "skew": skew}
                                 }
                                 
                                 try:
