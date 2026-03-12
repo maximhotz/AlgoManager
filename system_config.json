@@ -3,7 +3,7 @@
     "zmq_host": "localhost",
     "zmq_port": 5555,
     "mt5_terminal_path": "C:\\Program Files\\Metatrader 5\\terminal64.exe",
-    "authorized_account_number": 410349
+    "authorized_account_number": 427273
   },
   "risk_management": {
     "basket_enabled": false,
@@ -16,18 +16,18 @@
       "script": "SignalEngines/Signal_Velocity.py",
       "magic_number": 33333,
       "symbol": "US500",
-      "volume": 0.05,
+      "volume": 0.02,
       "parameters": {
         "time_window_sec": 2,
         "cooldown_sec": 5,
         "use_dynamic_threshold": true,
-        "fallback_threshold": 0.5,
+        "fallback_threshold": 2.0,
         "spacing_filter": {
           "enabled": true,
           "mode": "dynamic", 
-          "fixed_points": 1.5,
+          "fixed_points": 2.0,
           "atr_period": 14,
-          "atr_multiplier": 0.35
+          "atr_multiplier": 0.5
         },
         "efficiency_filter": {
           "enabled": true,
@@ -35,24 +35,24 @@
           "threshold": 0.35
         },
         "calibration": {
-          "lookback_days": 10,
+          "lookback_days": 20,
           "short_lookback_days": 3,
-          "percentile": 0.95,
+          "percentile": 0.96,
           "recalibrate_minutes": 2,
           "time_slice_minutes": 10
         },
         "dynamic_sizing": {
           "enabled": true,
           "lookback_minutes": 60,
-          "base_volume": 0.1,
+          "base_volume": 0.02,
           "grind_zone": {
             "skew_threshold": 10,
-            "with_trend_volume": 0.10,
-            "fade_trend_volume": 0.05
+            "with_trend_volume": 0.02,
+            "fade_trend_volume": 0.01
           },
           "runaway_zone": {
             "skew_threshold": 25,
-            "with_trend_volume": 0.15,
+            "with_trend_volume": 0.03,
             "fade_trend_volume": 0.00
           }
         },
