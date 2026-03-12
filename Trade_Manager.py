@@ -21,7 +21,7 @@ SNAPSHOT_INTERVAL = 60
 tracked_tickets = {} # Maps Ticket -> Strategy ID
 trade_metadata = {}  # Maps Ticket -> {Speed, RSI, etc.}
 system_locked = False 
-basket_start_equity = None # NEW: The Equity Watermark Anchor
+basket_start_equity = None # The Equity Watermark Anchor
 
 # Initialize Database
 db = Database()
@@ -234,12 +234,20 @@ def check_basket_logic():
     acc = mt5.account_info()
     if acc is None: return
 
+    # --- THE FLAT ACCOUNT RESET ---
+    positions = mt5.positions_get()
+    if positions is None or len(positions) == 0:
+        if basket_start_equity is not None:
+            print("Manager: Account is flat. Wiping old Basket Anchor...")
+            basket_start_equity = None
+        return # Stop checking basket math, there are no open trades!
+
     current_equity = acc.equity
 
-    # Set the Anchor Point (Watermark) if it doesn't exist yet
+    # Set the Anchor Point (Watermark) ONLY when the first trade of a new basket opens
     if basket_start_equity is None:
         basket_start_equity = current_equity
-        print(f"Manager: 🎯 Basket Tracking Started. Anchor Equity: ${basket_start_equity:.2f}")
+        print(f"Manager: 🎯 New Basket Started. Anchor Equity: ${basket_start_equity:.2f}")
 
     # Grab target from config
     tp_limit = risk.get('basket_take_profit_usd')
@@ -251,7 +259,7 @@ def check_basket_logic():
             print(f"\n!!! BASKET TP HIT (Equity: ${current_equity:.2f} >= Target: ${target_amount:.2f}) !!!")
             close_all_positions(reason="Equity Target Reached")
             
-            # Reset the anchor to None. It will grab the fresh post-close equity on the next loop!
+            # Reset the anchor to None. 
             basket_start_equity = None
             print("🔄 BASKET RESET: Waiting for trades to clear before setting new anchor...\n")
 
