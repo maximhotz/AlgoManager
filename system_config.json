@@ -7,7 +7,7 @@
   },
   "risk_management": {
     "basket_enabled": true,
-    "basket_take_profit_usd": 0.1
+    "basket_take_profit_usd": 0.25
   },
   "strategies": {
     "SPEED_US500_01": {
