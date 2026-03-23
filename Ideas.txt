@@ -10,3 +10,8 @@ AI verwenden, um parameter der Strategien live zu verändern? Wann merh gewicht 
 Reinforcement Learner that looks at the recent performance of the particular strategy 
 and adjusts position size/trading times accordingly
 WHich data neds to be tracked for this?
+
+-Android App for Mamangement
+
+
+https://updates.quantower.com/OptimusFLOW/x64/latest/OptimusFLOW.exe

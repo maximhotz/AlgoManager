@@ -1,0 +1,14 @@
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.csproj.AssemblyReference.cache
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.AssemblyInfoInputs.cache
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.AssemblyInfo.cs
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.csproj.CoreCompileInputs.cache
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telemetry.sourcelink.json
+C:\Program Files\OptimusFLOW\Settings\Scripts\Strategies\ML-Telemetry\ML_Telemetry.deps.json
+C:\Program Files\OptimusFLOW\Settings\Scripts\Strategies\ML-Telemetry\ML_Telemetry.dll
+C:\Program Files\OptimusFLOW\Settings\Scripts\Strategies\ML-Telemetry\ML_Telemetry.pdb
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML_Telemetry.dll
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\refint\ML_Telemetry.dll
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML_Telemetry.pdb
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ref\ML_Telemetry.dll
+C:\Users\maxim\Desktop\EA Trigger Portfolio\QT\ML-Telemetry\obj\Debug\ML-Telem.14484CA7.Up2Date

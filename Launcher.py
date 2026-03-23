@@ -8,6 +8,7 @@ import os
 CONFIG_FILE = "system_config.json"
 MANAGER_SCRIPT = "Trade_Manager.py"
 DASHBOARD_SCRIPT = "Dashboard.py"
+BRAIN_SCRIPT = os.path.join("ML_Pipeline", "ML_Brain.py") # <--- THE NEW BRAIN
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -17,27 +18,21 @@ def load_config():
         return json.load(f)
 
 def launch_dashboard():
-    """Helper function to launch the dashboard with specific Streamlit flags"""
     print("Launcher: 🚀 Starting Dashboard UI...")
-    
-    # Windows specific flag for new window
     CREATE_NEW_CONSOLE = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
-    
     cmd = [
         "streamlit", "run", DASHBOARD_SCRIPT,
-        "--server.address=0.0.0.0",     # Allow Tailscale/LAN connections
-        "--server.port=8501",           # Fixed Port
-        "--theme.base=dark",            # Dark Mode
-        "--server.headless=true",       # Don't pop up browser on VM
+        "--server.address=0.0.0.0",
+        "--server.port=8501",
+        "--theme.base=dark",
+        "--server.headless=true",
         "--global.developmentMode=false"
     ]
-    
     return subprocess.Popen(cmd, creationflags=CREATE_NEW_CONSOLE)
 
 def main():
     print("--- ALGOTRADING SYSTEM LAUNCHER ---")
     
-    # 1. Load Config
     try:
         config = load_config()
     except Exception as e:
@@ -47,89 +42,68 @@ def main():
 
     processes = []
 
-    # 2. Start the Trade Manager (The Core)
+    # 1. Start Trade Manager (MT5 Execution)
     if os.path.exists(MANAGER_SCRIPT):
         print("Launcher: Starting Trade Manager...")
-        # Standard launch for Manager (closes on exit is fine usually, or use /k if it crashes too)
         CREATE_NEW_CONSOLE = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
-        manager_proc = subprocess.Popen(
-            ["python", MANAGER_SCRIPT],
-            creationflags=CREATE_NEW_CONSOLE
-        )
+        manager_proc = subprocess.Popen(["cmd", "/k", "python", MANAGER_SCRIPT], creationflags=CREATE_NEW_CONSOLE)
         processes.append(manager_proc)
     else:
         print(f"CRITICAL: {MANAGER_SCRIPT} not found.")
-        input("Press Enter to exit...")
         return
 
-    # 3. Start the Dashboard (The UI)
+    # 2. Start ML Brain (Quantower Listener & Router)
+    if os.path.exists(BRAIN_SCRIPT):
+        print("Launcher: Starting ML Brain...")
+        CREATE_NEW_CONSOLE = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+        # cmd /k keeps the window open so you can see the Quantower signals arriving!
+        brain_proc = subprocess.Popen(["cmd", "/k", "python", BRAIN_SCRIPT], creationflags=CREATE_NEW_CONSOLE)
+        processes.append(brain_proc)
+    else:
+        print(f"CRITICAL: {BRAIN_SCRIPT} not found.")
+        return
+
+    # 3. Start Dashboard (UI)
     dash_proc = None
     if os.path.exists(DASHBOARD_SCRIPT):
         dash_proc = launch_dashboard()
         if dash_proc:
             print("Launcher: Dashboard running on http://localhost:8501")
-    else:
-        print(f"Warning: {DASHBOARD_SCRIPT} not found.")
-
-    print("Launcher: Waiting 3s for Manager to initialize...")
-    time.sleep(3)
-
-    # 4. Start Strategies (DEBUG MODE - KEEPS WINDOW OPEN)
-    print("Launcher: Loading Strategies...")
-    strategies = config.get("strategies", {})
-    
-    for strat_id, settings in strategies.items():
-        if settings.get("enabled", False):
-            script_rel_path = settings.get("script")
-            
-            if script_rel_path:
-                script_abs_path = os.path.abspath(script_rel_path)
-                
-                if os.path.exists(script_abs_path):
-                    print(f"Launcher: Starting Strategy {strat_id} (Debug Mode)...")
-                    
-                    # COMMAND EXPLANATION:
-                    # cmd /k : Run command and KEEP window open (Prevent closing on error)
-                    cmd = ["cmd", "/k", "python", script_abs_path]
-                    
-                    CREATE_NEW_CONSOLE = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
-                    p = subprocess.Popen(cmd, creationflags=CREATE_NEW_CONSOLE)
-                    processes.append(p)
-                else:
-                    print(f"❌ ERROR: Script not found: {script_abs_path}")
-            else:
-                print(f"Warning: Strategy {strat_id} enabled but no script path.")
 
     print(f"\n--- SYSTEM RUNNING: {len(processes)} Processes Active ---")
     print("Keep this window open. Press Ctrl+C to kill all bots.")
 
-    # 5. Monitor Loop (The Heartbeat)
+    # 4. Monitor Loop
     try:
         while True:
             time.sleep(2)
-            
-            # Check A: Is Trade Manager alive?
             if manager_proc.poll() is not None:
                 print("CRITICAL: Trade Manager died! Shutting down system.")
                 break
-            
-            # Check B: Is Dashboard alive? (Auto-Restart)
+            if brain_proc.poll() is not None:
+                print("CRITICAL: ML Brain died! Shutting down system.")
+                break
             if dash_proc is not None and dash_proc.poll() is not None:
-                print("⚠️ WARNING: Dashboard crashed (likely network). Restarting...")
+                print("⚠️ WARNING: Dashboard crashed. Restarting...")
                 dash_proc = launch_dashboard()
 
     except KeyboardInterrupt:
         print("\nLauncher: Stopping all processes...")
 
-    # 6. Cleanup
-    if dash_proc: processes.append(dash_proc) # Ensure dash is in list for cleanup
-    
+    # Cleanup
+    if dash_proc and dash_proc not in processes: 
+        processes.append(dash_proc)
+        
     for p in processes:
-        if p.poll() is None: # If still running
-            try:
-                p.terminate()
-            except:
-                pass
+        if p.poll() is None:
+            try: 
+                if os.name == 'nt':
+                    # /F = Force Kill, /T = Kill child processes (Tree Kill)
+                    subprocess.call(['taskkill', '/F', '/T', '/PID', str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    p.terminate()
+            except Exception as e: 
+                print(f"Cleanup error: {e}")
             
     print("Launcher: System Shutdown Complete.")
 

@@ -2,76 +2,22 @@
   "system": {
     "zmq_host": "localhost",
     "zmq_port": 5555,
-    "mt5_terminal_path": "C:\\Program Files\\Metatrader 5\\terminal64.exe",
+    "mt5_terminal_path": "E:\\FusionMarketsMT5\\terminal64.exe",
     "authorized_account_number": 427273
   },
   "risk_management": {
     "basket_enabled": true,
-    "basket_take_profit_usd": 0.25
+    "basket_take_profit_usd": 0.05
   },
   "strategies": {
-    "SPEED_US500_01": {
+    "QT_Velocity": {
       "enabled": true,
-      "script": "SignalEngines/Signal_Velocity.py",
       "magic_number": 33333,
       "symbol": "US500",
-      "volume": 0.05,
-      "parameters": {
-        "time_window_sec": 2,
-        "cooldown_sec": 5,
-        "use_dynamic_threshold": true,
-        "fallback_threshold": 2.0,
-        "spacing_filter": {
-          "enabled": true,
-          "mode": "dynamic", 
-          "fixed_points": 2.0,
-          "atr_period": 14,
-          "atr_multiplier": 0.5
-        },
-        "efficiency_filter": {
-          "enabled": true,
-          "lookback_minutes": 15,
-          "threshold": 0.35
-        },
-        "calibration": {
-          "lookback_days": 14,
-          "short_lookback_days": 3,
-          "percentile": 0.96,
-          "recalibrate_minutes": 2,
-          "time_slice_minutes": 10
-        },
-        "dynamic_sizing": {
-          "enabled": true,
-          "lookback_minutes": 60,
-          "base_volume": 0.05,
-          "grind_zone": {
-            "skew_threshold": 10,
-            "with_trend_volume": 0.05,
-            "fade_trend_volume": 0.02
-          },
-          "runaway_zone": {
-            "skew_threshold": 25,
-            "with_trend_volume": 0.10,
-            "fade_trend_volume": 0.00
-          }
-        },
-        "progressive_cooldown": {
-          "enabled": true,
-          "lookback_minutes": 60,
-          "tiers": [
-            {"open_trades": 10, "cooldown_sec": 30},
-            {"open_trades": 5, "cooldown_sec": 15}
-          ]
-        }
-      },
+      "volume": 0.01,
       "trade_limits": {
         "sl_points": 0,
-        "tp_points": 1.0,
-        "use_volatility_based_tp": true,
-        "volatility_lookback_sec": 160,
-        "tp_volatility_multiplier": 0.75,
-        "min_tp_points": 0.5,
-        "max_tp_points": 10.0
+        "tp_points": 1.0
       }
     }
   }
