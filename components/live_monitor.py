@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import MetaTrader5 as mt5
+import json
+import sqlite3
 from datetime import datetime, timedelta
 from components.charts import render_equity_chart, render_drawdown_chart
 from components.utils import get_strategy_name
@@ -42,7 +44,6 @@ def render_live_panel(strategies, config):
                     strat_live_data[strat_name]['net_count'] -= 1
 
     # --- SAVE SNAPSHOT (With Timezone Fix) ---
-    # We shift the "Now" time by +1 hour so it matches your local clock
     now = datetime.now() + timedelta(hours=TIME_OFFSET)
     timestamp_str = now.strftime('%H:%M:%S')
     timestamp_unix = now.timestamp()
@@ -62,16 +63,75 @@ def render_live_panel(strategies, config):
 
     st.session_state.session_full_history.append(snapshot)
 
-    # --- LIVE CHARTS ---
+    # --- LIVE AI FEED & STRATEGY DRAWDOWN ---
     df_live = pd.DataFrame(st.session_state.history_data)
     c1, c2 = st.columns(2)
+    
     with c1:
-        st.subheader("Account Health (Live 200 Ticks)")
-        render_equity_chart(df_live, key="chart_live_short")
+        st.subheader("🧠 Live AI Decision Feed")
+        feed_container = st.container(height=300) 
+        
+        db_path = config['system'].get('db_path', 'trading_system.db')
+        try:
+            conn = sqlite3.connect(db_path)
+            df_signals = pd.read_sql("SELECT timestamp, symbol, features_json FROM ml_features ORDER BY timestamp DESC LIMIT 20", conn)
+            conn.close()
+            
+            if not df_signals.empty:
+                valid_signals = 0
+                for _, row in df_signals.iterrows():
+                    try:
+                        data = json.loads(row['features_json'])
+                        ai_decision = data.get('ai_decision', {})
+                        
+                        if not ai_decision: continue
+                        
+                        conf = ai_decision.get('confidence', 0) * 100
+                        blocked = ai_decision.get('blocked', False)
+                        vol = ai_decision.get('volume', 0)
+                        
+                        ts_dt = datetime.fromtimestamp(row['timestamp'] / 1000) + timedelta(hours=TIME_OFFSET)
+                        time_str = ts_dt.strftime('%H:%M:%S')
+                        
+                        if blocked:
+                            border_color = "#ff4b4b" 
+                            bg_color = "rgba(255, 75, 75, 0.1)"
+                            msg = f"🚫 <b>BLOCKED</b> &nbsp;|&nbsp; {row['symbol']} &nbsp;|&nbsp; Conf: {conf:.1f}%"
+                        else:
+                            border_color = "#2bd67b" 
+                            bg_color = "rgba(43, 214, 123, 0.1)"
+                            msg = f"✅ <b>APPROVED</b> &nbsp;|&nbsp; {row['symbol']} &nbsp;|&nbsp; Conf: {conf:.1f}% &nbsp;|&nbsp; Size: {vol}L"
+                        
+                        html_string = f"""
+                        <div style="
+                            border-left: 4px solid {border_color}; 
+                            background-color: {bg_color}; 
+                            padding: 8px 12px; 
+                            margin-bottom: 8px; 
+                            border-radius: 4px;
+                            font-family: monospace;
+                            font-size: 0.9rem;
+                        ">
+                            <span style="color: #888;">{time_str}</span> &nbsp;|&nbsp; {msg}
+                        </div>
+                        """
+                        feed_container.markdown(html_string, unsafe_allow_html=True)
+                        valid_signals += 1
+                        
+                    except Exception:
+                        continue
+                        
+                if valid_signals == 0:
+                    feed_container.info("Waiting for AI signals... (No recent AI data found)")
+            else:
+                feed_container.info("Waiting for AI signals... (Database is empty)")
+        except Exception as e:
+            feed_container.error(f"Could not load AI feed: {e}")
+            
     with c2:
         st.subheader("Strategy Drawdown (Attribution)")
         render_drawdown_chart(df_live, key="chart_drawdown_short")
-        
+
     st.subheader("Full Session Performance")
     df_full = pd.DataFrame(st.session_state.session_full_history)
     if not df_full.empty:

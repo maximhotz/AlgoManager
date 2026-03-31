@@ -289,7 +289,7 @@ def execute_trade(signal_data):
     symbol = settings.get('symbol', signal_data['symbol'])
     action = signal_data['action']
     magic = settings['magic_number']
-    volume = float(signal_data.get('volume', settings['volume']))
+    volume = round(float(signal_data.get('volume', settings['volume'])), 2)
     
     limits = settings.get('trade_limits', {})
     sl_points = limits.get('sl_points', 0)

@@ -11,14 +11,15 @@ CREATE TABLE IF NOT EXISTS trades (
     close_price REAL,
     sl REAL,
     tp REAL,
-    pnl REAL,              -- The Dollar PnL (For Dashboard)
-    pnl_points REAL,       -- NEW: The Point PnL (For AI)
+    pnl REAL,              
+    pnl_points REAL,       
     commission REAL,
     swap REAL,
     close_reason TEXT,
-    mfe REAL,               
+    mfe REAL,              
     mae REAL                
 );
+
 CREATE TABLE IF NOT EXISTS equity_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TIMESTAMP,
@@ -28,15 +29,12 @@ CREATE TABLE IF NOT EXISTS equity_history (
     strategy_performance TEXT
 );
 
+-- CLEANED UP: Only the core ID, raw JSON payload, and the AI's Target Label
 CREATE TABLE IF NOT EXISTS ml_features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp INTEGER,
     symbol TEXT,
     strategy_id TEXT,
     features_json TEXT,     
-    trade_action TEXT,      
-    trade_pnl REAL,          -- (We will map the Points here for the AI)
-    trade_close_reason TEXT, 
-    mfe REAL,                
-    mae REAL                 
+    target_label INTEGER    
 );

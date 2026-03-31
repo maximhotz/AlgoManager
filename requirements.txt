@@ -7,3 +7,6 @@ plotly
 pandas_ta
 scipy
 streamlit-lightweight-charts
+xgboost
+matplotlib
+scikit-learn

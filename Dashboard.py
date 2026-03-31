@@ -25,18 +25,33 @@ if 'data_restored' not in st.session_state:
     try:
         db = Database()
         
-        # A. Restore Daily Stats
-        stats = db.get_todays_stats()
-        st.session_state['daily_pnl'] = stats['daily_pnl']
-        st.session_state['daily_trades'] = stats['trade_count']
+        # A. Restore Daily Stats (Dynamically Computed)
+        recent_trades = db.fetch_trades(limit=200)
+        d_pnl = 0.0
+        d_trades = 0
+        
+        # Calculate Midnight relative to LOCAL time
+        now_local = datetime.now() + timedelta(hours=TIME_OFFSET)
+        midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        if recent_trades:
+            for t in recent_trades:
+                try:
+                    # Convert trade close time and apply the Frankfurt offset
+                    close_dt = pd.to_datetime(t['close_time']).to_pydatetime() + timedelta(hours=TIME_OFFSET)
+                    if close_dt >= midnight_local:
+                        d_pnl += float(t.get('pnl', 0.0))
+                        d_trades += 1
+                except Exception:
+                    continue
+                    
+        st.session_state['daily_pnl'] = d_pnl
+        st.session_state['daily_trades'] = d_trades
         
         # B. Restore Equity Curve (With Timezone Fix)
         equity_raw = db.fetch_equity_history(limit=2880) 
         equity_clean = []
         
-        # Calculate Midnight relative to LOCAL time (not Server time)
-        now_local = datetime.now() + timedelta(hours=TIME_OFFSET)
-        midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         midnight_timestamp = midnight_local.timestamp()
         
         for row in equity_raw:

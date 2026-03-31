@@ -30,104 +30,75 @@ class Database:
         except Exception as e: print(f"DB Init Error: {e}")
         finally: conn.close()
 
-    def insert_ml_snapshot(self, strategy_id, symbol, timestamp, payload):
-        conn = self.get_connection()
-        c = conn.cursor()
+    # --- HFT UPGRADE: Added explicit_id support ---
+    def insert_ml_snapshot(self, strategy_id, symbol, timestamp_ms, payload, explicit_id=None):
         try:
-            c.execute('''
-                INSERT INTO ml_features (timestamp, symbol, strategy_id, features_json) 
-                VALUES (?, ?, ?, ?)
-            ''', (timestamp, symbol, strategy_id, json.dumps(payload)))
-            conn.commit()
-            return c.lastrowid 
-        except Exception as e: return None
-        finally: conn.close()
-
-    def log_trade(self, trade_dict):
-        conn = self.get_connection()
-        c = conn.cursor()
-        
-        try:
-            o_time = trade_dict['open_time']
-            c_time = trade_dict['close_time']
-            if isinstance(o_time, datetime): o_time = o_time.strftime('%Y-%m-%d %H:%M:%S')
-            if isinstance(c_time, datetime): c_time = c_time.strftime('%Y-%m-%d %H:%M:%S')
-
-            ml_id = trade_dict.get('ml_feature_id')
-            mfe = trade_dict.get('mfe', 0.0)
-            mae = trade_dict.get('mae', 0.0)
-            reason = trade_dict['reason']
+            conn = self.get_connection()
+            c = conn.cursor()
+            json_str = json.dumps(payload)
             
-            # Extract PnL points early so both tables can use it
-            pnl_in_points = trade_dict.get('pnl_points', 0.0)
-
-            # --- INSERT EXACT HARD METRICS (NOW INCLUDING pnl_points) ---
-            c.execute('''
-                INSERT OR REPLACE INTO trades (
-                    ticket, ml_feature_id, strategy_id, symbol, action, open_time, close_time, 
-                    duration_sec, open_price, close_price, sl, tp, 
-                    pnl, pnl_points, commission, swap, close_reason, mfe, mae
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                trade_dict['ticket'], ml_id, trade_dict['strategy_id'], trade_dict['symbol'], trade_dict['action'],
-                o_time, c_time, trade_dict['duration'], trade_dict['open_price'], trade_dict['close_price'],
-                trade_dict.get('sl', 0), trade_dict.get('tp', 0), trade_dict['net_pnl'], pnl_in_points,
-                trade_dict['commission'], trade_dict['swap'], reason, mfe, mae
-            ))
-
-            # --- THE ML LOOP CLOSER ---
-            if ml_id:
-                c.execute('''
-                    UPDATE ml_features 
-                    SET trade_action = ?, trade_pnl = ?, trade_close_reason = ?, mfe = ?, mae = ?
-                    WHERE id = ?
-                ''', (trade_dict['action'], pnl_in_points, reason, mfe, mae, ml_id))
-                print(f"🧠 ML DB: Row {ml_id} updated -> Point PnL: {pnl_in_points} pts")
-
+            if explicit_id:
+                c.execute("""
+                    INSERT INTO ml_features (id, strategy_id, symbol, timestamp, features_json)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (explicit_id, strategy_id, symbol, timestamp_ms, json_str))
+                inserted_id = explicit_id
+            else:
+                c.execute("""
+                    INSERT INTO ml_features (strategy_id, symbol, timestamp, features_json)
+                    VALUES (?, ?, ?, ?)
+                """, (strategy_id, symbol, timestamp_ms, json_str))
+                inserted_id = c.lastrowid
+                
             conn.commit()
-        except Exception as e: print(f"Database Error: {e}")
-        finally: conn.close()
+            conn.close()
+            return inserted_id
+        except Exception as e:
+            print(f"Database Error (Insert ML): {e}")
+            return None
 
-    def get_todays_stats(self):
-        conn = self.get_connection()
-        c = conn.cursor()
+    # FIX: Properly aligned log_trade method
+    def log_trade(self, trade_data):
         try:
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            today_str = today_start.strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("SELECT COUNT(*), SUM(pnl) FROM trades WHERE close_time >= ?", (today_str,))
-            row = c.fetchone()
-            return {"daily_pnl": row[1] if row[1] else 0.0, "trade_count": row[0] if row[0] else 0}
-        except Exception: return {"daily_pnl": 0.0, "trade_count": 0}
-        finally: conn.close()
+            conn = self.get_connection()
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO trades (
+                    ticket, ml_feature_id, strategy_id, symbol, action, 
+                    open_time, close_time, duration_sec, open_price, close_price, 
+                    sl, tp, pnl, pnl_points, commission, swap, close_reason, mfe, mae
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_data['ticket'], trade_data.get('ml_feature_id'), trade_data['strategy_id'],
+                trade_data['symbol'], trade_data['action'], trade_data['open_time'],
+                trade_data['close_time'], trade_data['duration'], trade_data['open_price'],
+                trade_data['close_price'], trade_data['sl'], trade_data['tp'], trade_data['net_pnl'],
+                trade_data['pnl_points'], trade_data['commission'], trade_data['swap'],
+                trade_data['reason'], trade_data.get('mfe', 0.0), trade_data.get('mae', 0.0)
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Database Error (Log Trade): {e}")
 
-    def log_equity_snapshot(self, balance, equity, open_positions, strategy_data=None):
-        conn = self.get_connection()
-        c = conn.cursor()
-        strat_json = json.dumps(strategy_data) if strategy_data else "{}"
+    def log_equity_snapshot(self, balance, equity, open_positions, strategy_pl_dict):
         try:
-            c.execute('''
+            conn = self.get_connection()
+            c = conn.cursor()
+            strat_json = json.dumps(strategy_pl_dict)
+            c.execute("""
                 INSERT INTO equity_history (timestamp, balance, equity, open_positions, strategy_performance)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (datetime.now(), balance, equity, open_positions, strat_json))
+            """, (datetime.now(), balance, equity, open_positions, strat_json))
             conn.commit()
-        except Exception: pass
-        finally: conn.close()
+            conn.close()
+        except Exception as e:
+            print(f"Database Error (Log Equity): {e}")
 
-    def fetch_equity_history(self, limit=1000):
-        if not os.path.exists(DB_FILE): return []
-        conn = self.get_connection()
-        c = conn.cursor()
-        try:
-            c.execute("SELECT * FROM equity_history ORDER BY timestamp DESC LIMIT ?", (limit,))
-            return c.fetchall()
-        finally: conn.close()
-
-    def fetch_trades(self, strategy_id=None, limit=100):
-        if not os.path.exists(DB_FILE): return []
+    def fetch_recent_trades_with_features(self, limit=50, strategy_id=None):
         conn = self.get_connection()
         c = conn.cursor()
         
-        # --- THE MAGIC JOIN ---
         query = '''
             SELECT t.*, m.features_json 
             FROM trades t
@@ -147,7 +118,6 @@ class Database:
             
             for row in rows:
                 d = dict(row)
-                
                 pseudo_meta = {}
                 
                 if d.get('features_json'):
@@ -160,14 +130,29 @@ class Database:
                     pseudo_meta['vwap_dist'] = context.get('vwap_dist_pct')
                 
                 d['meta_json'] = pseudo_meta
-                
-                if 'features_json' in d:
-                    del d['features_json']
-                    
+                if 'features_json' in d: del d['features_json']
                 results.append(d)
                 
             return results
         except Exception as e: 
             print(f"Fetch Error: {e}")
             return []
-        finally: conn.close()
+        finally:
+            conn.close()
+
+    # --- ADDED: Missing Dashboard Functions ---
+    def fetch_trades(self, limit=1000):
+        # Simply maps to your existing feature-rich trade fetcher
+        return self.fetch_recent_trades_with_features(limit=limit)
+
+    def fetch_equity_history(self, limit=2880):
+        conn = self.get_connection()
+        c = conn.cursor()
+        try:
+            c.execute("SELECT * FROM equity_history ORDER BY timestamp DESC LIMIT ?", (limit,))
+            return c.fetchall()
+        except Exception as e:
+            print(f"DB Error (fetch_equity_history): {e}")
+            return []
+        finally:
+            conn.close()

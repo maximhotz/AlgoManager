@@ -1,13 +1,16 @@
 {
   "system": {
+    "db_path": "trading_system.db",
     "zmq_host": "localhost",
     "zmq_port": 5555,
-    "mt5_terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "mt5_terminal_path": "E:\\FusionMarketsMT5\\terminal64.exe",
+    "mt5_terminal_path2": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "broker_utc_offset_hours": 3,
     "authorized_account_number": 427273
   },
   "risk_management": {
     "basket_enabled": true,
-    "basket_take_profit_usd": 0.05
+    "basket_take_profit_usd": 0.25
   },
   "strategies": {
     "QT_Velocity": {
@@ -18,6 +21,35 @@
       "trade_limits": {
         "sl_points": 0,
         "tp_points": 1.0
+      }
+    }
+  },
+  "ml_pipeline": {
+    "_comment_labeling": "Horizon is minutes to wait. Spread allowance forces trade to clear the bid/ask spread.",
+    "labeling": {
+      "horizon_minutes": 10,
+      "spread_allowance": 0.30
+    },
+    "_comment_alpha_filter": "Subsample and colsample prevent overfitting. Scale_pos_weight punishes the AI for missing losses.",
+    "alpha_filter": {
+      "json_column_name": "features_json",
+      "model_save_path": "ML_Pipeline/alpha_filter_v1.json",
+      "train_test_split": 0.80,
+      "dynamic_sizing": {
+        "enabled": true,
+        "min_confidence_threshold": 0.50,
+        "min_volume": 0.02,
+        "max_volume": 0.20,
+        "curve_power": 2.0
+      },
+      "xgb_params": {
+        "max_depth": 4,
+        "learning_rate": 0.05,
+        "n_estimators": 150,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "eval_metric": "logloss",
+        "scale_pos_weight": 2.0
       }
     }
   }
