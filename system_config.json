@@ -18,7 +18,7 @@
       "flash_crash_watcher": {
         "enabled": true,
         "adr_days": 14,
-        "adr_fraction_threshold": 0.15,
+        "adr_fraction_threshold": 0.1,
         "evaluation_window_seconds": 3
       },
       "news_watcher": {
