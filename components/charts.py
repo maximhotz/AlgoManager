@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import numpy as np
+import plotly.graph_objects as go
 from streamlit_lightweight_charts import renderLightweightCharts
 
 def safe_float(val):
@@ -145,3 +146,57 @@ def render_drawdown_chart(df_live, key=None):
             "series": series_list
         }
     ], key=key)
+
+def render_regime_chart(df):
+    """
+    Renders a Plotly candlestick chart with background colors for the AI Regime.
+    """
+    if df.empty:
+        st.info("Waiting for price data...")
+        return
+
+    # 1. Base Candlestick Chart
+    fig = go.Figure(data=[go.Candlestick(
+        x=df['time'],
+        open=df['open'], high=df['high'],
+        low=df['low'], close=df['close'],
+        increasing_line_color='#2bd67b', decreasing_line_color='#ff4b4b'
+    )])
+
+    # 2. Color Map matching your legacy C# parameters (0 = Bull, 1 = Chop, 2 = Bear)
+    color_map = {
+        0: "rgba(43, 214, 123, 0.15)",  # Green (Bull)
+        1: "rgba(255, 255, 255, 0.05)", # Gray  (Chop)
+        2: "rgba(255, 75, 75, 0.15)"    # Red   (Bear)
+    }
+
+    # 3. Paint Background Regimes
+    if 'regime' in df.columns and not df['regime'].isna().all():
+        # Create blocks of continuous regimes
+        df['block'] = (df['regime'] != df['regime'].shift(1)).cumsum()
+        
+        for _, group in df.groupby('block'):
+            regime_val = group['regime'].iloc[0]
+            if pd.isna(regime_val): continue
+            
+            start_time = group['time'].iloc[0]
+            end_time = group['time'].iloc[-1]
+            
+            fig.add_vrect(
+                x0=start_time, x1=end_time,
+                fillcolor=color_map.get(regime_val, "rgba(0,0,0,0)"),
+                opacity=1,
+                layer="below", line_width=0,
+            )
+
+    # 4. Styling to match Dashboard Theme
+    fig.update_layout(
+        template="plotly_dark",
+        margin=dict(l=0, r=0, t=30, b=0),
+        height=300,
+        xaxis_rangeslider_visible=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)

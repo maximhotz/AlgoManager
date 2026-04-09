@@ -21,7 +21,7 @@ def get_daily_adr(symbol, days=14):
     return total_range / len(rates)
 
 def fetch_tier1_news():
-    print("🌐 Fetching this week's Economic Calendar from Forex Factory...")
+    print("🌐 Fetching latest Economic Calendar from Forex Factory...")
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
     
     tier1_times = []
@@ -163,7 +163,8 @@ def run_safety_watcher():
 
     # State variables
     price_history = collections.deque()
-    last_news_fetch_day = None
+    last_news_fetch_time = 0  # Changed from daily tracking to timestamp tracking
+    NEWS_FETCH_INTERVAL_SEC = 4 * 3600  # 4 hours in seconds
     tier1_timestamps = []
 
     while True:
@@ -177,10 +178,10 @@ def run_safety_watcher():
                 time.sleep(5) 
                 continue
 
-            # --- NEWS API DAILY REFRESH ---
-            if news_enabled and last_news_fetch_day != now_utc.day:
+            # --- NEWS API INTRADAY REFRESH ---
+            if news_enabled and (now_ts - last_news_fetch_time) >= NEWS_FETCH_INTERVAL_SEC:
                 tier1_timestamps = fetch_tier1_news()
-                last_news_fetch_day = now_utc.day
+                last_news_fetch_time = now_ts
 
             # --- NEWS BLACKOUT CHECK ---
             if news_enabled:

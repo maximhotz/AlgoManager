@@ -5,14 +5,15 @@
     "zmq_port": 5555,
     "zmq_brain_port": 5556,
     "zmq_regime_port": 5557,
-    "mt5_terminal_path": "E:\\FusionMarketsMT5\\terminal64.exe",
-    "mt5_terminal_path2": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "mt5_terminal_path2": "E:\\FusionMarketsMT5\\terminal64.exe",
+    "mt5_terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
     "broker_utc_offset_hours": 3,
-    "authorized_account_number": 427273
+    "local_utc_offset_hours": 1,
+    "authorized_account_number": 320798
   },
   "risk_management": {
     "basket_enabled": true,
-    "basket_take_profit_usd": 0.5,
+    "basket_take_profit_usd": 0.25,
     "emergency_protocols": {
       "system_locked": false,
       "flash_crash_watcher": {
@@ -41,6 +42,11 @@
     }
   },
   "ml_pipeline": {
+    "regime_mapping": {
+      "bull_longs_only": 0,
+      "chop_bidirectional": 1,
+      "bear_shorts_only": 2
+    },
     "_comment_labeling": "Horizon is minutes to wait. Spread allowance forces trade to clear the bid/ask spread.",
     "labeling": {
       "horizon_minutes": 10,
@@ -55,9 +61,9 @@
         "enabled": true,
         "supervisor_present": true,
         "min_confidence_threshold": 0.6,
-        "min_volume": 0.1,
-        "max_volume_supervised": 0.5,
-        "max_volume_unsupervised": 0.1,
+        "min_volume": 0.01,
+        "max_volume_supervised": 0.1,
+        "max_volume_unsupervised": 0.05,
         "curve_power": 3.0
       },
       "xgb_params": {
@@ -67,34 +73,33 @@
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "eval_metric": "logloss",
-        "scale_pos_weight": 2.0
+        "scale_pos_weight": 0.33
       }
     },
-    "_comment_vision_transformer": "SigLIP parameters. Algorithmic labeling uses ATR multipliers for dynamic volatility adjustment.",
-    "vision_transformer": {
+    "hmm_regime": {
       "enabled": true,
-      "model_save_path": "ML_Pipeline/siglip_trading_brain_best.pt",
-      "data_generation": {
-        "window_size_minutes": 90,
-        "generation_interval_minutes": 15,
-        "canvas_resolution": 1024
-      },
-      "algorithmic_labeling": {
-        "forward_horizon_minutes": 45,
-        "target_atr_multiplier": 10.0,
-        "pain_atr_multiplier": 4.0
-      },
-      "classes": {
-        "0": "longs_only",
-        "1": "scalp_both",
-        "2": "shorts_only"
-      },
-      "training_params": {
-        "batch_size": 16,
-        "epochs": 10,
-        "learning_rate": 5e-05,
-        "train_test_split": 0.8
-      }
+      "features_window": 15,
+      "n_components": 5,
+      "random_state": 42,
+      "model_save_path": "ML_Pipeline/hmm_model.pkl"
+    },
+    "rf_classifier": {
+      "enabled": true,
+      "n_estimators": 100,
+      "max_depth": 5,
+      "random_state": 42,
+      "model_save_path": "ML_Pipeline/rf_live_soldier.pkl",
+      "features": [
+        "Log_Return",
+        "Variance",
+        "Delta_Slope",
+        "Macro_Distance",
+        "Hour_Sin",
+        "Hour_Cos",
+        "RVOL",
+        "Size_Imbalance",
+        "Delta_Percent"
+      ]
     }
   }
 }

@@ -149,40 +149,99 @@ namespace ML_Telemetry
         }
 
         // ==========================================
-        // 🔭 5-MINUTE SIGLIP WATCHTOWER LOOP
+        // 🔭 1-MINUTE RANDOM FOREST WATCHTOWER LOOP
         // ==========================================
         private async Task RegimeUpdaterLoop()
         {
+            // Note: Changed from 60000ms delay to run accurately at the close of every minute
             while (_runMacroUpdater && this.symbol != null)
             {
                 try
                 {
                     if (_isZmqConnected && _zmqRegimeSocket != null)
                     {
-                        _zmqRegimeSocket.SendFrame("ping");
+                        DateTime now = Core.Instance.TimeUtils.DateTimeUtcNow;
+                        // We need 240 bars for the Macro SMA calculation in Python
+                        int requiredBars = 240;
 
-                        string reply;
-                        if (_zmqRegimeSocket.TryReceiveFrameString(TimeSpan.FromSeconds(5), out reply))
+                        using (var history = this.symbol.GetHistory(Period.MIN1, now.AddHours(-6), now))
                         {
-                            var jsonResponse = JObject.Parse(reply);
-                            if (jsonResponse["status"]?.ToString() == "success")
+                            if (history != null && history.Count >= requiredBars)
                             {
-                                int newRegime = (int)jsonResponse["signal"];
-                                string regimeName = jsonResponse["regime"]?.ToString();
+                                var lastBars = history.OrderByDescending(x => x.TimeLeft).Take(requiredBars).Reverse().ToList();
 
-                                if (_currentMacroRegime != newRegime)
+                                var payloadData = new List<object>();
+
+                                foreach (var bar in lastBars)
                                 {
-                                    Log($"🔭 WATCHTOWER: Regime Shift to {regimeName.ToUpper()} ({newRegime})", StrategyLoggingLevel.Trading);
-                                    _currentMacroRegime = newRegime;
+                                    var volAnalysis = bar.VolumeAnalysisData;
+                                    var totalVol = volAnalysis != null ? volAnalysis.Total : null;
+
+                                    double delta = totalVol != null ? totalVol.Delta : 0;
+                                    double avgBuySize = totalVol != null && totalVol.BuyTrades > 0 ? totalVol.BuyVolume / totalVol.BuyTrades : 0;
+                                    double avgSellSize = totalVol != null && totalVol.SellTrades > 0 ? totalVol.SellVolume / totalVol.SellTrades : 0;
+
+                                    payloadData.Add(new
+                                    {
+                                        DateTime = bar.TimeLeft.ToString("yyyy-MM-dd HH:mm:ss"),
+                                        Close = bar[PriceType.Close],
+                                        Volume = bar[PriceType.Volume],
+                                        Delta = delta,
+                                        // To match Python's keys exactly:
+                                        Property1 = new Newtonsoft.Json.JsonPropertyAttribute("Average buy size"),
+                                        AvgBuy = avgBuySize,
+                                        Property2 = new Newtonsoft.Json.JsonPropertyAttribute("Average sell size"),
+                                        AvgSell = avgSellSize
+                                    });
+                                }
+
+                                // Quick manual serialization fix for spaces in JSON keys required by pandas
+                                var finalPayloadList = payloadData.Select(p => {
+                                    dynamic d = p;
+                                    return new Dictionary<string, object>
+                                    {
+                                        { "DateTime", d.DateTime },
+                                        { "Close", d.Close },
+                                        { "Volume", d.Volume },
+                                        { "Delta", d.Delta },
+                                        { "Average buy size", d.AvgBuy },
+                                        { "Average sell size", d.AvgSell }
+                                    };
+                                }).ToList();
+
+                                var payload = new { data = finalPayloadList };
+                                string jsonPayload = JsonConvert.SerializeObject(payload);
+
+                                _zmqRegimeSocket.SendFrame(jsonPayload);
+
+                                string reply;
+                                if (_zmqRegimeSocket.TryReceiveFrameString(TimeSpan.FromSeconds(5), out reply))
+                                {
+                                    var jsonResponse = JObject.Parse(reply);
+                                    if (jsonResponse["status"]?.ToString() == "success")
+                                    {
+                                        int newRegime = (int)jsonResponse["signal"];
+                                        string regimeName = jsonResponse["regime"]?.ToString();
+
+                                        if (_currentMacroRegime != newRegime)
+                                        {
+                                            Log($"🔭 WATCHTOWER: Regime Shift to {regimeName.ToUpper()} ({newRegime})", StrategyLoggingLevel.Trading);
+                                            _currentMacroRegime = newRegime;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Log($"⚠️ Watchtower Python Error: {jsonResponse["message"]}", StrategyLoggingLevel.Error);
+                                    }
+                                }
+                                else
+                                {
+                                    Log("⚠️ Watchtower Timeout. Reconnecting...", StrategyLoggingLevel.Error);
+                                    _zmqRegimeSocket.Dispose();
+                                    _zmqRegimeSocket = new RequestSocket();
+                                    _zmqRegimeSocket.Connect(ZmqRegimeAddress);
                                 }
                             }
-                        }
-                        else
-                        {
-                            Log("⚠️ Watchtower Timeout. Reconnecting...", StrategyLoggingLevel.Error);
-                            _zmqRegimeSocket.Dispose();
-                            _zmqRegimeSocket = new RequestSocket();
-                            _zmqRegimeSocket.Connect(ZmqRegimeAddress);
                         }
                     }
                 }
@@ -191,7 +250,7 @@ namespace ML_Telemetry
                     Log($"Regime Loop Error: {ex.Message}", StrategyLoggingLevel.Error);
                 }
 
-                await Task.Delay(300000);
+                await Task.Delay(60000); // Polling every 60 seconds
             }
         }
 
@@ -391,7 +450,6 @@ namespace ML_Telemetry
                         double dailyOpenDistPct = _dailyOpen > 0 ? Math.Round(((last.Price - _dailyOpen) / _dailyOpen) * 100, 4) : 0;
                         double atr1hRound = Math.Round(_atr1h, 4);
 
-                        // 🚀 RESTORED SPIKE LOG
                         Log($"🚨 SPIKE: {speedDelta:F2} pts | 1H SMA Dist: {sma1hDistPct}% | ATR: {atr1hRound}", StrategyLoggingLevel.Trading);
 
                         TriggerMLSnapshot(

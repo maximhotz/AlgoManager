@@ -140,9 +140,7 @@ class Database:
         finally:
             conn.close()
 
-    # --- ADDED: Missing Dashboard Functions ---
     def fetch_trades(self, limit=1000):
-        # Simply maps to your existing feature-rich trade fetcher
         return self.fetch_recent_trades_with_features(limit=limit)
 
     def fetch_equity_history(self, limit=2880):
@@ -153,6 +151,30 @@ class Database:
             return c.fetchall()
         except Exception as e:
             print(f"DB Error (fetch_equity_history): {e}")
+            return []
+        finally:
+            conn.close()
+
+    # --- NEW: Dashboard AI Regime Functions ---
+    def log_regime(self, timestamp, regime, name):
+        try:
+            conn = self.get_connection()
+            c = conn.cursor()
+            c.execute("INSERT INTO regime_history VALUES (?, ?, ?)", (timestamp, regime, name))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Database Error (Log Regime): {e}")
+
+    def fetch_regimes(self, limit=300):
+        conn = self.get_connection()
+        c = conn.cursor()
+        try:
+            c.execute("SELECT * FROM regime_history ORDER BY timestamp DESC LIMIT ?", (limit,))
+            rows = c.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"DB Error (fetch_regimes): {e}")
             return []
         finally:
             conn.close()

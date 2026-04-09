@@ -48,19 +48,23 @@ def get_file_mtime(filepath):
 def load_config():
     global last_config_mtime, config
     if not os.path.exists(CONFIG_FILE): return False
+    
     current_mtime = get_file_mtime(CONFIG_FILE)
     if current_mtime > last_config_mtime:
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                new_config = json.load(f)
-                if 'system' in new_config and 'strategies' in new_config:
-                    config = new_config
-                    last_config_mtime = current_mtime
-                    print("Manager: Configuration Loaded.")
-                    return True
-        except Exception as e:
-            print(f"Manager: Config Read Error: {e}")
-            return False
+        # Retry loop to prevent empty JSON reads during rapid file saves
+        for attempt in range(5):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    new_config = json.load(f)
+                    if 'system' in new_config and 'strategies' in new_config:
+                        config = new_config
+                        last_config_mtime = current_mtime
+                        print("Manager: Configuration Loaded.")
+                        return True
+            except Exception as e:
+                time.sleep(0.05) # Wait 50ms and try again
+        print("Manager: Config Read Failed after 5 retries.")
+        return False
     return bool(config)
 
 def connect_mt5():
@@ -313,26 +317,13 @@ def execute_trade(signal_data):
     order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
     price = tick.ask if action == "BUY" else tick.bid
     
-    if sl_points > 0:
-        raw_sl = price - sl_points if action == "BUY" else price + sl_points
-        sl_price = round(raw_sl, digits)
-    else:
-        sl_price = 0.0
-        
-    if tp_points > 0:
-        raw_tp = price + tp_points if action == "BUY" else price - tp_points
-        tp_price = round(raw_tp, digits)
-    else:
-        tp_price = 0.0
-
+    # 1. Send the initial order WITHOUT SL or TP
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": volume,
         "type": order_type,
         "price": price,
-        "sl": sl_price,
-        "tp": tp_price,
         "magic": magic,
         "comment": strat_id,
         "type_time": mt5.ORDER_TIME_GTC,
@@ -340,8 +331,49 @@ def execute_trade(signal_data):
     }
 
     result = mt5.order_send(request)
-    if result.retcode != mt5.TRADE_RETCODE_DONE: return f"Manager: Failed ({result.comment})"
+    if result.retcode != mt5.TRADE_RETCODE_DONE: 
+        return f"Manager: Failed ({result.comment})"
     
+    # --- NEW: Give MT5 Server 100ms to fully register the position ---
+    time.sleep(0.1) 
+    
+    # 2. Grab the TRUE filled price by querying the live position
+    actual_fill_price = result.price # Fallback
+    pos_check = mt5.positions_get(ticket=result.order)
+    if pos_check and len(pos_check) > 0:
+        actual_fill_price = pos_check[0].price_open
+    
+    # 3. Calculate the exact TP from the TRUE slipped fill price
+    if sl_points > 0:
+        raw_sl = actual_fill_price - sl_points if action == "BUY" else actual_fill_price + sl_points
+        sl_price = round(raw_sl, digits)
+    else:
+        sl_price = 0.0
+        
+    if tp_points > 0:
+        raw_tp = actual_fill_price + tp_points if action == "BUY" else actual_fill_price - tp_points
+        tp_price = round(raw_tp, digits)
+    else:
+        tp_price = 0.0
+
+    # 4. Modify the position to apply the rigid SL and TP
+    if sl_price > 0 or tp_price > 0:
+        mod_request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": result.order,
+            "symbol": symbol,
+            "sl": sl_price,
+            "tp": tp_price
+        }
+        mod_result = mt5.order_send(mod_request)
+        
+        # --- NEW: Catch and log silent modification failures ---
+        if mod_result.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"⚠️ TP Modify Failed: {mod_result.comment} (Code: {mod_result.retcode})")
+        else:
+            print(f"🎯 TP Successfully Anchored to {tp_price}")
+    
+    # --- Logging & Memory ---
     tracked_tickets[result.order] = strat_id
     trade_mfe_mae[result.order] = {'mfe': 0.0, 'mae': 0.0}
     

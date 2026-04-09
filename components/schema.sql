@@ -38,3 +38,10 @@ CREATE TABLE IF NOT EXISTS ml_features (
     features_json TEXT,     
     target_label INTEGER    
 );
+
+-- NEW: Table for the AI Market Regimes
+CREATE TABLE IF NOT EXISTS regime_history (
+    timestamp REAL,
+    regime INTEGER,
+    name TEXT
+);

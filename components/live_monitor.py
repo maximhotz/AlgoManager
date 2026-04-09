@@ -1,16 +1,20 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import MetaTrader5 as mt5
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from components.charts import render_equity_chart, render_drawdown_chart
+from components.charts import render_equity_chart, render_drawdown_chart, render_regime_chart
 from components.utils import get_strategy_name
 
 MAX_DATA_POINTS = 200
-TIME_OFFSET = 1 # FIX: +1 Hour for Frankfurt
 
 def render_live_panel(strategies, config):
+    # --- DYNAMIC TIMEZONE CONFIGURATION ---
+    local_offset = config.get('system', {}).get('local_utc_offset_hours', 1)
+    broker_offset = config.get('system', {}).get('broker_utc_offset_hours', 3)
+    
     # --- DATA COLLECTION ---
     acc = mt5.account_info()
     if not acc: return
@@ -43,8 +47,8 @@ def render_live_panel(strategies, config):
                     strat_live_data[strat_name]['net_lots'] -= pos.volume
                     strat_live_data[strat_name]['net_count'] -= 1
 
-    # --- SAVE SNAPSHOT (With Timezone Fix) ---
-    now = datetime.now() + timedelta(hours=TIME_OFFSET)
+    # --- SAVE SNAPSHOT ---
+    now = datetime.now() + timedelta(hours=local_offset)
     timestamp_str = now.strftime('%H:%M:%S')
     timestamp_unix = now.timestamp()
     
@@ -90,7 +94,7 @@ def render_live_panel(strategies, config):
                         blocked = ai_decision.get('blocked', False)
                         vol = ai_decision.get('volume', 0)
                         
-                        ts_dt = datetime.fromtimestamp(row['timestamp'] / 1000) + timedelta(hours=TIME_OFFSET)
+                        ts_dt = datetime.fromtimestamp(row['timestamp'] / 1000) + timedelta(hours=local_offset)
                         time_str = ts_dt.strftime('%H:%M:%S')
                         
                         if blocked:
@@ -129,8 +133,49 @@ def render_live_panel(strategies, config):
             feed_container.error(f"Could not load AI feed: {e}")
             
     with c2:
-        st.subheader("Strategy Drawdown (Attribution)")
-        render_drawdown_chart(df_live, key="chart_drawdown_short")
+        st.subheader("Live Market Regime (SPX)")
+        symbol = config.get('strategies', {}).get('QT_Velocity', {}).get('symbol', 'US500')
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 100)
+        
+        if rates is not None and len(rates) > 0:
+            df_rates = pd.DataFrame(rates)
+            
+            # --- TIMEZONE FIX: Sync MT5 Broker Time with System Database Time ---
+            df_rates['time'] = pd.to_datetime(df_rates['time'], unit='s') - pd.Timedelta(hours=broker_offset) + pd.Timedelta(hours=local_offset)
+            
+            try:
+                db_path = config['system'].get('db_path', 'trading_system.db')
+                conn = sqlite3.connect(db_path)
+                
+                # Drop old data from dummy pings so it doesn't smear
+                recent_threshold = datetime.now().timestamp() - (12 * 3600) 
+                df_regimes = pd.read_sql(f"SELECT * FROM regime_history WHERE timestamp > {recent_threshold} ORDER BY timestamp DESC LIMIT 300", conn)
+                conn.close()
+                
+                if not df_regimes.empty:
+                    df_regimes['time'] = pd.to_datetime(df_regimes['timestamp'], unit='s') + timedelta(hours=local_offset)
+                    
+                    df_rates = df_rates.sort_values('time')
+                    df_regimes = df_regimes.sort_values('time')
+                    
+                    df_chart = pd.merge_asof(
+                        df_rates, 
+                        df_regimes[['time', 'regime']], 
+                        on='time', 
+                        direction='backward',
+                        tolerance=pd.Timedelta('10m') 
+                    )
+                else:
+                    df_chart = df_rates
+                    df_chart['regime'] = np.nan
+            except Exception:
+                df_chart = df_rates
+                df_chart['regime'] = np.nan
+                
+            from components.charts import render_regime_chart
+            render_regime_chart(df_chart)
+        else:
+            st.info(f"Waiting for MT5 price data for {symbol}...")
 
     st.subheader("Full Session Performance")
     df_full = pd.DataFrame(st.session_state.session_full_history)

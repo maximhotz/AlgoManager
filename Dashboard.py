@@ -16,9 +16,9 @@ from components.database import Database
 
 st.set_page_config(page_title="Algo Command", layout="wide")
 
-# --- CONFIGURATION ---
-# FIX: Offset hours to match Frankfurt (CET) if Server is UTC
-TIME_OFFSET = 1 
+# --- DYNAMIC CONFIGURATION ---
+_cfg_init = load_config()
+LOCAL_OFFSET = _cfg_init.get('system', {}).get('local_utc_offset_hours', 1) if _cfg_init else 1
 
 def update_supervisor_mode(new_state):
     config_path = 'system_config.json' 
@@ -67,7 +67,6 @@ def toggle_system_lock_and_hedge(new_state):
         saved_stops = cfg['risk_management']['emergency_protocols']['saved_sl_tp']
 
         if new_state: # --- WE ARE LOCKING THE SYSTEM ---
-            # 1. Wipe and Save all existing SLs and TPs
             if positions:
                 for pos in positions:
                     if pos.tp != 0.0 or pos.sl != 0.0:
@@ -83,7 +82,6 @@ def toggle_system_lock_and_hedge(new_state):
 
             cfg['risk_management']['emergency_protocols']['saved_sl_tp'] = saved_stops
 
-            # 2. Execute the Hedge (if we aren't already flat)
             net_volume = 0.0
             if positions:
                 for pos in positions:
@@ -114,7 +112,6 @@ def toggle_system_lock_and_hedge(new_state):
                 mt5.order_send(request)
 
         else: # --- WE ARE UNLOCKING THE SYSTEM ---
-            # 1. Restore the original SLs and TPs
             if positions and saved_stops:
                 for pos in positions:
                     ticket_str = str(pos.ticket)
@@ -130,10 +127,8 @@ def toggle_system_lock_and_hedge(new_state):
                         }
                         mt5.order_send(request)
             
-            # 2. Clear the memory bank
             cfg['risk_management']['emergency_protocols']['saved_sl_tp'] = {}
 
-        # Save the global config state
         cfg['risk_management']['emergency_protocols']['system_locked'] = new_state
         with open(config_path, 'w') as f:
             json.dump(cfg, f, indent=2)
@@ -160,13 +155,13 @@ if 'data_restored' not in st.session_state:
         d_pnl = 0.0
         d_trades = 0
         
-        now_local = datetime.now() + timedelta(hours=TIME_OFFSET)
+        now_local = datetime.now() + timedelta(hours=LOCAL_OFFSET)
         midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         
         if recent_trades:
             for t in recent_trades:
                 try:
-                    close_dt = pd.to_datetime(t['close_time']).to_pydatetime() + timedelta(hours=TIME_OFFSET)
+                    close_dt = pd.to_datetime(t['close_time']).to_pydatetime() + timedelta(hours=LOCAL_OFFSET)
                     if close_dt >= midnight_local:
                         d_pnl += float(t.get('pnl', 0.0))
                         d_trades += 1
@@ -198,7 +193,7 @@ if 'data_restored' not in st.session_state:
             if 'timestamp' in d:
                 try:
                     ts_pandas = pd.to_datetime(d['timestamp'])
-                    ts_python = ts_pandas.to_pydatetime() + timedelta(hours=TIME_OFFSET)
+                    ts_python = ts_pandas.to_pydatetime() + timedelta(hours=LOCAL_OFFSET)
                     t_unix = ts_python.timestamp()
                     
                     if t_unix < midnight_timestamp:
@@ -233,11 +228,10 @@ if 'session_full_history' not in st.session_state:
 
 # --- 3. MT5 TICKET FILTER ---
 if 'reset_ticket_threshold' not in st.session_state:
-    config = load_config()
-    if config:
-        path = config['system'].get('mt5_terminal_path')
+    if _cfg_init:
+        path = _cfg_init['system'].get('mt5_terminal_path')
         if init_mt5(path):
-            now_local = datetime.now() + timedelta(hours=TIME_OFFSET)
+            now_local = datetime.now() + timedelta(hours=LOCAL_OFFSET)
             midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
             history_before = mt5.history_deals_get(midnight_local - timedelta(days=7), midnight_local)
             
@@ -251,7 +245,7 @@ if 'reset_ticket_threshold' not in st.session_state:
         st.session_state.reset_ticket_threshold = 0
 
 def main():
-    st.title("⚡ Algo Command (Frankfurt Time)")
+    st.title("⚡ Algo Command")
     
     config = load_config()
     if not config: return
@@ -265,7 +259,6 @@ def main():
     with st.sidebar:
         st.header("Risk Management")
         
-        # --- 1. EMERGENCY LOCK TOGGLE ---
         risk_cfg = config.get('risk_management', {}).get('emergency_protocols', {})
         live_lock_state = risk_cfg.get('system_locked', False)
         
@@ -281,7 +274,6 @@ def main():
             help="ON: Trading Suspended. OFF: Trading Active. Watcher can auto-trigger this."
         )
 
-        # --- 2. SUPERVISOR MODE TOGGLE ---
         sizing_cfg = config.get('ml_pipeline', {}).get('alpha_filter', {}).get('dynamic_sizing', {})
         current_supervisor_state = sizing_cfg.get('supervisor_present', False)
         
@@ -297,7 +289,6 @@ def main():
         
         st.divider()
 
-        # --- 3. RESET TRACKING BUTTON ---
         st.header("Session Controls")
         if st.button("🔄 Reset Tracking Today", type="primary"):
             st.session_state.history_data = []
@@ -305,7 +296,7 @@ def main():
             st.session_state['daily_pnl'] = 0.0
             st.session_state['daily_trades'] = 0
             
-            now_local = datetime.now() + timedelta(hours=TIME_OFFSET)
+            now_local = datetime.now() + timedelta(hours=LOCAL_OFFSET)
             deals = mt5.history_deals_get(now_local - timedelta(days=7), now_local + timedelta(days=1))
             if deals and len(deals) > 0:
                 st.session_state.reset_ticket_threshold = deals[-1].ticket
@@ -333,7 +324,6 @@ def main():
                 global_net_lots -= pos.volume
                 global_net_count -= 1
 
-    # --- EXPOSURE DISPLAY LOGIC ---
     if global_net_lots > 0:
         exposure_val = f"{global_net_lots:+.2f} Lots"
         exposure_tag = "LONG 🐂"
@@ -347,7 +337,6 @@ def main():
         exposure_tag = "FLAT ⚪"
         delta_color = "off"
 
-    # --- TOP METRICS ROW ---
     if acc:
         kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
         
