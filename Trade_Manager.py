@@ -334,46 +334,54 @@ def execute_trade(signal_data):
     if result.retcode != mt5.TRADE_RETCODE_DONE: 
         return f"Manager: Failed ({result.comment})"
     
-    # --- NEW: Give MT5 Server 100ms to fully register the position ---
-    time.sleep(0.1) 
+    # --- 2. THE BULLDOZER RETRY LOOP ---
+    tp_anchored = False
+    actual_fill_price = result.price 
+    sl_price = 0.0
+    tp_price = 0.0
     
-    # 2. Grab the TRUE filled price by querying the live position
-    actual_fill_price = result.price # Fallback
-    pos_check = mt5.positions_get(ticket=result.order)
-    if pos_check and len(pos_check) > 0:
-        actual_fill_price = pos_check[0].price_open
-    
-    # 3. Calculate the exact TP from the TRUE slipped fill price
-    if sl_points > 0:
-        raw_sl = actual_fill_price - sl_points if action == "BUY" else actual_fill_price + sl_points
-        sl_price = round(raw_sl, digits)
-    else:
-        sl_price = 0.0
+    for attempt in range(10): # Try 10 times (up to 2 seconds)
+        time.sleep(0.2) # Wait 200ms per attempt
         
-    if tp_points > 0:
-        raw_tp = actual_fill_price + tp_points if action == "BUY" else actual_fill_price - tp_points
-        tp_price = round(raw_tp, digits)
-    else:
-        tp_price = 0.0
+        # Continuously update the true fill price just in case
+        pos_check = mt5.positions_get(ticket=result.order)
+        if pos_check and len(pos_check) > 0:
+            actual_fill_price = pos_check[0].price_open
+            
+        if sl_points > 0:
+            raw_sl = actual_fill_price - sl_points if action == "BUY" else actual_fill_price + sl_points
+            sl_price = round(raw_sl, digits)
+        else: sl_price = 0.0
+            
+        if tp_points > 0:
+            raw_tp = actual_fill_price + tp_points if action == "BUY" else actual_fill_price - tp_points
+            tp_price = round(raw_tp, digits)
+        else: tp_price = 0.0
 
-    # 4. Modify the position to apply the rigid SL and TP
-    if sl_price > 0 or tp_price > 0:
-        mod_request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "position": result.order,
-            "symbol": symbol,
-            "sl": sl_price,
-            "tp": tp_price
-        }
-        mod_result = mt5.order_send(mod_request)
-        
-        # --- NEW: Catch and log silent modification failures ---
-        if mod_result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"⚠️ TP Modify Failed: {mod_result.comment} (Code: {mod_result.retcode})")
+        if sl_price > 0 or tp_price > 0:
+            mod_request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": result.order,
+                "symbol": symbol,
+                "sl": sl_price,
+                "tp": tp_price
+            }
+            mod_result = mt5.order_send(mod_request)
+            
+            if mod_result.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"🎯 TP Successfully Anchored to {tp_price} (Attempt {attempt+1})")
+                tp_anchored = True
+                break
+            else:
+                print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
         else:
-            print(f"🎯 TP Successfully Anchored to {tp_price}")
-    
-    # --- Logging & Memory ---
+            tp_anchored = True # No TP/SL requested, break loop
+            break
+
+    if not tp_anchored:
+        print(f"🚨 CRITICAL: Failed to anchor TP after 10 attempts! Position {result.order} is naked!")
+
+    # --- 3. Logging & Memory ---
     tracked_tickets[result.order] = strat_id
     trade_mfe_mae[result.order] = {'mfe': 0.0, 'mae': 0.0}
     
@@ -382,7 +390,7 @@ def execute_trade(signal_data):
     meta['tp_price_memory'] = tp_price
     trade_metadata[result.order] = meta
         
-    return f"Manager: OPENED {action} (Ticket: {result.order}) | Vol: {volume}"
+    return f"Manager: OPENED {action} (Ticket: {result.order}) | Vol: {volume} | Exact TP: {tp_price}"
 
 def run_manager():
     global socket, context
