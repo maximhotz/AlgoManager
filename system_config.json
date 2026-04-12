@@ -5,8 +5,8 @@
     "zmq_port": 5555,
     "zmq_brain_port": 5556,
     "zmq_regime_port": 5557,
-    "mt5_terminal_path2": "E:\\FusionMarketsMT5\\terminal64.exe",
-    "mt5_terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    "mt5_terminal_path": "E:\\FusionMarketsMT5\\terminal64.exe",
+    "mt5_terminal_path2": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
     "broker_utc_offset_hours": 3,
     "local_utc_offset_hours": 1,
     "authorized_account_number": 410349
@@ -15,7 +15,7 @@
     "basket_enabled": true,
     "basket_take_profit_usd": 0.25,
     "emergency_protocols": {
-      "system_locked": false,
+      "system_locked": true,
       "flash_crash_watcher": {
         "enabled": true,
         "adr_days": 14,

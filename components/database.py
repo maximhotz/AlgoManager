@@ -13,7 +13,6 @@ class Database:
         self.initialize()
 
     def get_connection(self):
-        # --- FIX: Added 15s timeout and WAL mode for simultaneous read/write ---
         conn = sqlite3.connect(DB_FILE, timeout=15.0, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
@@ -33,7 +32,6 @@ class Database:
         except Exception as e: print(f"DB Init Error: {e}")
         finally: conn.close()
 
-    # --- HFT UPGRADE: Added explicit_id support ---
     def insert_ml_snapshot(self, strategy_id, symbol, timestamp_ms, payload, explicit_id=None):
         try:
             conn = self.get_connection()
@@ -126,10 +124,12 @@ class Database:
                     feat = json.loads(d['features_json'])
                     trigger = feat.get('trigger', {})
                     context = feat.get('context', {})
+                    ai_dec = feat.get('ai_decision', {}) # --- NEW ---
                     
                     pseudo_meta['speed'] = trigger.get('speed_delta')
                     pseudo_meta['absorption'] = trigger.get('absorption_ratio')
                     pseudo_meta['vwap_dist'] = context.get('vwap_dist_pct')
+                    pseudo_meta['confidence'] = ai_dec.get('confidence', 0.0) * 100 # --- NEW ---
                 
                 d['meta_json'] = pseudo_meta
                 if 'features_json' in d: del d['features_json']
