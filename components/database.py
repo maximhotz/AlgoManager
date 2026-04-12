@@ -13,7 +13,10 @@ class Database:
         self.initialize()
 
     def get_connection(self):
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        # --- FIX: Added 15s timeout and WAL mode for simultaneous read/write ---
+        conn = sqlite3.connect(DB_FILE, timeout=15.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -57,7 +60,6 @@ class Database:
             print(f"Database Error (Insert ML): {e}")
             return None
 
-    # FIX: Properly aligned log_trade method
     def log_trade(self, trade_data):
         try:
             conn = self.get_connection()
@@ -155,7 +157,6 @@ class Database:
         finally:
             conn.close()
 
-    # --- NEW: Dashboard AI Regime Functions ---
     def log_regime(self, timestamp, regime, name):
         try:
             conn = self.get_connection()

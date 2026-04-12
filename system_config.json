@@ -9,7 +9,7 @@
     "mt5_terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
     "broker_utc_offset_hours": 3,
     "local_utc_offset_hours": 1,
-    "authorized_account_number": 320798
+    "authorized_account_number": 410349
   },
   "risk_management": {
     "basket_enabled": true,

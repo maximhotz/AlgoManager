@@ -77,7 +77,10 @@ def render_live_panel(strategies, config):
         
         db_path = config['system'].get('db_path', 'trading_system.db')
         try:
-            conn = sqlite3.connect(db_path)
+            # --- FIX: Added timeout and WAL mode ---
+            conn = sqlite3.connect(db_path, timeout=15.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            
             df_signals = pd.read_sql("SELECT timestamp, symbol, features_json FROM ml_features ORDER BY timestamp DESC LIMIT 20", conn)
             conn.close()
             
@@ -145,7 +148,10 @@ def render_live_panel(strategies, config):
             
             try:
                 db_path = config['system'].get('db_path', 'trading_system.db')
-                conn = sqlite3.connect(db_path)
+                
+                # --- FIX: Added timeout and WAL mode ---
+                conn = sqlite3.connect(db_path, timeout=15.0)
+                conn.execute("PRAGMA journal_mode=WAL;")
                 
                 # Drop old data from dummy pings so it doesn't smear
                 recent_threshold = datetime.now().timestamp() - (12 * 3600) 
