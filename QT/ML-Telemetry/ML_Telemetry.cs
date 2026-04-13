@@ -153,7 +153,6 @@ namespace ML_Telemetry
         // ==========================================
         private async Task RegimeUpdaterLoop()
         {
-            // Note: Changed from 60000ms delay to run accurately at the close of every minute
             while (_runMacroUpdater && this.symbol != null)
             {
                 try
@@ -161,10 +160,10 @@ namespace ML_Telemetry
                     if (_isZmqConnected && _zmqRegimeSocket != null)
                     {
                         DateTime now = Core.Instance.TimeUtils.DateTimeUtcNow;
-                        // We need 240 bars for the Macro SMA calculation in Python
                         int requiredBars = 240;
 
-                        using (var history = this.symbol.GetHistory(Period.MIN1, now.AddHours(-6), now))
+                        // --- THE FIX 1: Look back 4 days to bridge the weekend gap ---
+                        using (var history = this.symbol.GetHistory(Period.MIN1, now.AddDays(-4), now))
                         {
                             if (history != null && history.Count >= requiredBars)
                             {
@@ -187,7 +186,6 @@ namespace ML_Telemetry
                                         Close = bar[PriceType.Close],
                                         Volume = bar[PriceType.Volume],
                                         Delta = delta,
-                                        // To match Python's keys exactly:
                                         Property1 = new Newtonsoft.Json.JsonPropertyAttribute("Average buy size"),
                                         AvgBuy = avgBuySize,
                                         Property2 = new Newtonsoft.Json.JsonPropertyAttribute("Average sell size"),
@@ -195,7 +193,6 @@ namespace ML_Telemetry
                                     });
                                 }
 
-                                // Quick manual serialization fix for spaces in JSON keys required by pandas
                                 var finalPayloadList = payloadData.Select(p => {
                                     dynamic d = p;
                                     return new Dictionary<string, object>
@@ -237,7 +234,14 @@ namespace ML_Telemetry
                                 else
                                 {
                                     Log("⚠️ Watchtower Timeout. Reconnecting...", StrategyLoggingLevel.Error);
-                                    _zmqRegimeSocket.Dispose();
+
+                                    // --- THE FIX 2: Kill the zombie message before disposing ---
+                                    if (_zmqRegimeSocket != null)
+                                    {
+                                        _zmqRegimeSocket.Options.Linger = TimeSpan.Zero;
+                                        _zmqRegimeSocket.Dispose();
+                                    }
+
                                     _zmqRegimeSocket = new RequestSocket();
                                     _zmqRegimeSocket.Connect(ZmqRegimeAddress);
                                 }
@@ -248,6 +252,24 @@ namespace ML_Telemetry
                 catch (Exception ex)
                 {
                     Log($"Regime Loop Error: {ex.Message}", StrategyLoggingLevel.Error);
+
+                    // --- THE FIX 3: Mid-Flight Socket Rebuild to prevent XSend lock ---
+                    try
+                    {
+                        if (_zmqRegimeSocket != null)
+                        {
+                            _zmqRegimeSocket.Options.Linger = TimeSpan.Zero;
+                            _zmqRegimeSocket.Dispose();
+                        }
+
+                        _zmqRegimeSocket = new RequestSocket();
+                        _zmqRegimeSocket.Connect(ZmqRegimeAddress);
+                        Log("🔧 Watchtower Socket auto-repaired after runtime crash.", StrategyLoggingLevel.Trading);
+                    }
+                    catch (Exception rebuildEx)
+                    {
+                        Log($"Socket Rebuild Failed: {rebuildEx.Message}", StrategyLoggingLevel.Error);
+                    }
                 }
 
                 await Task.Delay(60000); // Polling every 60 seconds
@@ -311,8 +333,6 @@ namespace ML_Telemetry
                         double high = newestCandles[i][PriceType.High];
                         double low = newestCandles[i][PriceType.Low];
 
-                        // newestCandles is ordered newest to oldest. 
-                        // So index [i+1] is the chronologically previous candle.
                         double prevClose = (i + 1 < newestCandles.Count) ? newestCandles[i + 1][PriceType.Close] : newestCandles[i][PriceType.Open];
 
                         double tr1 = high - low;
@@ -554,7 +574,13 @@ namespace ML_Telemetry
                 if (!_zmqSocket.TryReceiveFrameString(TimeSpan.FromMilliseconds(500), out reply))
                 {
                     Log("⚠️ ZMQ Timeout: No ACK from Python. Resetting socket...", StrategyLoggingLevel.Error);
-                    _zmqSocket.Dispose();
+
+                    // --- THE FIX: Kill the HFT zombie message before disposing ---
+                    if (_zmqSocket != null)
+                    {
+                        _zmqSocket.Options.Linger = TimeSpan.Zero;
+                        _zmqSocket.Dispose();
+                    }
                     _zmqSocket = new RequestSocket();
                     _zmqSocket.Connect(ZmqAddress);
                 }
@@ -562,6 +588,19 @@ namespace ML_Telemetry
             catch (Exception ex)
             {
                 Log($"Snapshot Error: {ex.Message}", StrategyLoggingLevel.Error);
+
+                // --- THE FIX: Mid-Flight HFT Socket Rebuild ---
+                try
+                {
+                    if (_zmqSocket != null)
+                    {
+                        _zmqSocket.Options.Linger = TimeSpan.Zero;
+                        _zmqSocket.Dispose();
+                    }
+                    _zmqSocket = new RequestSocket();
+                    _zmqSocket.Connect(ZmqAddress);
+                }
+                catch { } // Fail silently if rebuild fails so we don't crash the main tick loop
             }
         }
 

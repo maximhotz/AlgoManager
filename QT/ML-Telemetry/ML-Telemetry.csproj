@@ -10,7 +10,7 @@
     <RootNamespace>ML_Telemetry</RootNamespace>
     <StartAction>Program</StartAction>
     <StartProgram>C:\Program Files\OptimusFLOW\TradingPlatform\v1.144.6\Console.StarterNew.exe</StartProgram>
-    <StartArguments>--address 127.0.0.1 --port 63995</StartArguments>
+    <StartArguments>--address 127.0.0.1 --port 54171</StartArguments>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
