@@ -359,7 +359,7 @@ def execute_trade(signal_data):
     if result.retcode != mt5.TRADE_RETCODE_DONE: 
         return f"Manager: Failed ({result.comment})"
     
-    # --- 2. THE BULLDOZER RETRY LOOP ---
+    # --- 2. THE UPGRADED BULLDOZER RETRY LOOP ---
     tp_anchored = False
     actual_fill_price = result.price 
     sl_price = 0.0
@@ -370,8 +370,11 @@ def execute_trade(signal_data):
         
         # Continuously update the true fill price just in case
         pos_check = mt5.positions_get(ticket=result.order)
-        if pos_check and len(pos_check) > 0:
-            actual_fill_price = pos_check[0].price_open
+        if not pos_check or len(pos_check) == 0:
+            tp_anchored = True # Position was already closed
+            break
+            
+        actual_fill_price = pos_check[0].price_open
             
         if sl_points > 0:
             raw_sl = actual_fill_price - sl_points if action == "BUY" else actual_fill_price + sl_points
@@ -397,6 +400,45 @@ def execute_trade(signal_data):
                 print(f"🎯 TP Successfully Anchored to {tp_price} (Attempt {attempt+1})")
                 tp_anchored = True
                 break
+            elif mod_result.retcode == 10016:
+                # FLASH MOVE DETECTED: Check if we are already past TP or SL
+                tick_now = mt5.symbol_info_tick(symbol)
+                if tick_now:
+                    # Check if we blasted past TP
+                    if (action == "BUY" and tick_now.bid >= tp_price) or (action == "SELL" and tick_now.ask <= tp_price):
+                        print(f"🚀 FLASH PROFIT: Market smashed past TP ({tp_price}) in {attempt * 200}ms! Closing immediately.")
+                        close_req = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "position": result.order,
+                            "symbol": symbol,
+                            "volume": pos_check[0].volume,
+                            "type": mt5.ORDER_TYPE_SELL if action == "BUY" else mt5.ORDER_TYPE_BUY,
+                            "price": tick_now.bid if action == "BUY" else tick_now.ask,
+                            "magic": magic,
+                            "comment": "Flash TP Close",
+                        }
+                        mt5.order_send(close_req)
+                        tp_anchored = True
+                        break
+                        
+                    # Check if we blasted past SL
+                    if sl_price > 0 and ((action == "BUY" and tick_now.bid <= sl_price) or (action == "SELL" and tick_now.ask >= sl_price)):
+                        print(f"💥 FLASH STOPPED: Market fell past SL ({sl_price})! Closing immediately.")
+                        close_req = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "position": result.order,
+                            "symbol": symbol,
+                            "volume": pos_check[0].volume,
+                            "type": mt5.ORDER_TYPE_SELL if action == "BUY" else mt5.ORDER_TYPE_BUY,
+                            "price": tick_now.bid if action == "BUY" else tick_now.ask,
+                            "magic": magic,
+                            "comment": "Flash SL Close",
+                        }
+                        mt5.order_send(close_req)
+                        tp_anchored = True
+                        break
+                        
+                print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
             else:
                 print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
         else:
