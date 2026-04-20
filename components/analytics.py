@@ -93,23 +93,26 @@ def render_analytics_tab():
     regimes = db.fetch_regimes(limit=50000)
     if regimes:
         df_reg = pd.DataFrame(regimes)
-        local_offset = 1
+        
+        # --- FIXED: Use Broker Offset for MT5 Alignment ---
+        broker_offset = 3 
         config_path = "system_config.json"
         if os.path.exists(config_path):
             try:
                 with open(config_path, 'r') as f:
                     cfg = json.load(f)
-                    local_offset = cfg.get('system', {}).get('local_utc_offset_hours', 1)
+                    broker_offset = cfg.get('system', {}).get('broker_utc_offset_hours', 3)
             except Exception: pass
 
-        df_reg['time'] = pd.to_datetime(df_reg['timestamp'], unit='s') + pd.Timedelta(hours=local_offset)
+        df_reg['time'] = pd.to_datetime(df_reg['timestamp'], unit='s') + pd.Timedelta(hours=broker_offset)
         df = df.sort_values('open_time')
         df_reg = df_reg.sort_values('time')
 
+        # --- FIXED: Tightened tolerance to 4 hours ---
         df_merged = pd.merge_asof(
             df, df_reg[['time', 'regime', 'name']],
             left_on='open_time', right_on='time',
-            direction='backward', tolerance=pd.Timedelta('24h')
+            direction='backward', tolerance=pd.Timedelta('4h')
         )
         df_merged['name'] = df_merged['name'].fillna("Unknown/No Data")
 
@@ -144,19 +147,14 @@ def render_analytics_tab():
     st.subheader("🎯 AI Confidence Sizing Matrix")
     st.caption("Does higher AI confidence actually translate to a higher win rate? Use this to tune your dynamic sizing.")
 
-    # 1. Catch silent failures (If the column doesn't exist)
     if 'confidence' in df.columns:
-        
-        # 2. Filter out pre-AI historical trades
         conf_df = df[df['confidence'] > 0].copy()
 
         if not conf_df.empty:
-            # Create discrete Tiers for the confidence scores
             bins = [0, 50, 60, 70, 80, 90, 100]
             labels = ['<50%', '50-60%', '60-70%', '70-80%', '80-90%', '90-100%']
             conf_df['Conf_Tier'] = pd.cut(conf_df['confidence'], bins=bins, labels=labels)
 
-            # Calculate Win Rate and PnL per tier
             conf_stats = conf_df.groupby('Conf_Tier').apply(
                 lambda x: pd.Series({
                     'Trades': x['ticket'].count(),
@@ -166,7 +164,6 @@ def render_analytics_tab():
                 })
             ).reset_index()
 
-            # Clean up empty bins
             conf_stats = conf_stats[conf_stats['Trades'] > 0]
 
             c_conf_mat, c_conf_chart = st.columns([1, 1.5])
