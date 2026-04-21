@@ -51,7 +51,6 @@ def load_config():
     
     current_mtime = get_file_mtime(CONFIG_FILE)
     if current_mtime > last_config_mtime:
-        # Retry loop to prevent empty JSON reads during rapid file saves
         for attempt in range(5):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -62,7 +61,7 @@ def load_config():
                         print("Manager: Configuration Loaded.")
                         return True
             except Exception as e:
-                time.sleep(0.05) # Wait 50ms and try again
+                time.sleep(0.05)
         print("Manager: Config Read Failed after 5 retries.")
         return False
     return bool(config)
@@ -108,13 +107,11 @@ def update_mfe_mae():
     for pos in positions:
         ticket = pos.ticket
         if ticket in trade_mfe_mae:
-            # Calculate distance from entry in points
             if pos.type == mt5.POSITION_TYPE_BUY:
                 current_point_dist = pos.price_current - pos.price_open
             else:
                 current_point_dist = pos.price_open - pos.price_current
             
-            # We track the absolute excursion in points
             if current_point_dist > trade_mfe_mae[ticket]['mfe']:
                 trade_mfe_mae[ticket]['mfe'] = current_point_dist
             if current_point_dist < trade_mfe_mae[ticket]['mae']:
@@ -155,11 +152,9 @@ def check_closed_trades():
         exit_deal = next((d for d in deals if d.entry in [mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT]), None)
         
         if exit_deal:
-            # Grab the metadata to pull the ml_feature_id
             meta = trade_metadata.get(ticket, {})
             ml_id = meta.get('ml_feature_id')
             
-            # Grab the MFE and MAE
             mfe_mae_data = trade_mfe_mae.get(ticket, {'mfe': 0.0, 'mae': 0.0})
             mfe_val = round(mfe_mae_data['mfe'], 2)
             mae_val = round(mfe_mae_data['mae'], 2)
@@ -192,11 +187,9 @@ def check_closed_trades():
 
             print(f"💰 Closed: {strat_id} | ${net_pl:.2f} ({pnl_pts:.2f} pts) | {reason} | MFE: {mfe_val} pts / MAE: {mae_val} pts")
             
-            # Pull the SL and TP from our temporary memory
             sl_mem = meta.get('sl_price_memory', 0.0)
             tp_mem = meta.get('tp_price_memory', 0.0)
 
-            # THE ULTRA-CLEAN HARD METRIC DICTIONARY
             trade_record = {
                 "ticket": ticket,
                 "ml_feature_id": ml_id,
@@ -250,7 +243,6 @@ def check_basket_logic():
     global basket_start_equity
     load_config() 
     
-    # --- EMERGENCY SYSTEM LOCK CHECK ---
     risk_cfg = config.get('risk_management', {}).get('emergency_protocols', {})
     if risk_cfg.get('system_locked', False): 
         return
@@ -266,9 +258,7 @@ def check_basket_logic():
 
     positions = mt5.positions_get()
     
-    # --- 1. BASKET RESET LOGIC (No positions open) ---
     if positions is None or len(positions) == 0:
-        # If memory or config still thinks a basket is active, clear it
         if basket_start_equity is not None or risk.get('active_basket_anchor_usd') is not None:
             basket_start_equity = None
             config['risk_management']['active_basket_anchor_usd'] = None
@@ -279,23 +269,19 @@ def check_basket_logic():
 
     current_equity = acc.equity
 
-    # --- 2. BASKET START OR RESUME LOGIC ---
     if basket_start_equity is None:
         saved_anchor = risk.get('active_basket_anchor_usd')
         
         if saved_anchor is not None:
-            # We just rebooted. Resume the basket from the config file!
             basket_start_equity = saved_anchor
             print(f"Manager: 🔄 Resumed Active Basket. Original Anchor Equity: ${basket_start_equity:.2f}")
         else:
-            # We are genuinely starting a brand new basket.
             basket_start_equity = current_equity
             config['risk_management']['active_basket_anchor_usd'] = basket_start_equity
             with open(CONFIG_FILE, "w") as f:
                 json.dump(config, f, indent=2)
             print(f"Manager: 🎯 New Basket Started. Anchor Equity saved to config: ${basket_start_equity:.2f}")
 
-    # --- 3. BASKET TAKE PROFIT CHECK ---
     tp_limit = risk.get('basket_take_profit_usd')
     if tp_limit and tp_limit > 0:
         target_amount = basket_start_equity + tp_limit
@@ -303,7 +289,6 @@ def check_basket_logic():
             print(f"\n!!! BASKET TP HIT (Equity: ${current_equity:.2f} >= Target: ${target_amount:.2f}) !!!")
             close_all_positions(reason="Equity Target Reached")
             
-            # Wipe the anchor clean after a successful close
             basket_start_equity = None
             config['risk_management']['active_basket_anchor_usd'] = None
             with open(CONFIG_FILE, "w") as f:
@@ -337,7 +322,14 @@ def execute_trade(signal_data):
     tick = mt5.symbol_info_tick(symbol)
     if not sym_info or not tick: return "Manager: No Data"
     
+    # --- PROPER MT5 NORMALIZATION MATH ---
     digits = sym_info.digits
+    tick_size = sym_info.trade_tick_size
+    if tick_size == 0: tick_size = sym_info.point # Fallback
+    
+    def norm_price(raw_p):
+        """Forces Python floats into strict MT5 legal broker steps"""
+        return round(round(raw_p / tick_size) * tick_size, digits)
     
     order_type = mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL
     price = tick.ask if action == "BUY" else tick.bid
@@ -365,10 +357,9 @@ def execute_trade(signal_data):
     sl_price = 0.0
     tp_price = 0.0
     
-    for attempt in range(10): # Try 10 times (up to 2 seconds)
-        time.sleep(0.2) # Wait 200ms per attempt
+    for attempt in range(10): 
+        time.sleep(0.2) 
         
-        # Continuously update the true fill price just in case
         pos_check = mt5.positions_get(ticket=result.order)
         if not pos_check or len(pos_check) == 0:
             tp_anchored = True # Position was already closed
@@ -378,12 +369,12 @@ def execute_trade(signal_data):
             
         if sl_points > 0:
             raw_sl = actual_fill_price - sl_points if action == "BUY" else actual_fill_price + sl_points
-            sl_price = round(raw_sl, digits)
+            sl_price = norm_price(raw_sl)
         else: sl_price = 0.0
             
         if tp_points > 0:
             raw_tp = actual_fill_price + tp_points if action == "BUY" else actual_fill_price - tp_points
-            tp_price = round(raw_tp, digits)
+            tp_price = norm_price(raw_tp)
         else: tp_price = 0.0
 
         if sl_price > 0 or tp_price > 0:
@@ -401,12 +392,50 @@ def execute_trade(signal_data):
                 tp_anchored = True
                 break
             elif mod_result.retcode == 10016:
-                # FLASH MOVE DETECTED: Check if we are already past TP or SL
                 tick_now = mt5.symbol_info_tick(symbol)
-                if tick_now:
-                    # Check if we blasted past TP
-                    if (action == "BUY" and tick_now.bid >= tp_price) or (action == "SELL" and tick_now.ask <= tp_price):
-                        print(f"🚀 FLASH PROFIT: Market smashed past TP ({tp_price}) in {attempt * 200}ms! Closing immediately.")
+                sym_info_live = mt5.symbol_info(symbol)
+                
+                if tick_now and sym_info_live:
+                    # Calculate the broker's absolute minimum distance allowed
+                    min_dist = max((tick_now.ask - tick_now.bid), (sym_info_live.trade_stops_level * sym_info_live.point))
+                    
+                    # --- PROXIMITY TRAP CHECK ---
+                    # Is the market too close to the TP to legally place the order?
+                    if action == "BUY" and tp_price > 0 and tick_now.bid >= (tp_price - min_dist):
+                        print(f"🚀 PROXIMITY PROFIT: Market ({tick_now.bid}) is too close to TP ({tp_price}) to anchor. Closing immediately.")
+                        close_req = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "position": result.order,
+                            "symbol": symbol,
+                            "volume": pos_check[0].volume,
+                            "type": mt5.ORDER_TYPE_SELL,
+                            "price": tick_now.bid,
+                            "magic": magic,
+                            "comment": "Proximity TP Close",
+                        }
+                        mt5.order_send(close_req)
+                        tp_anchored = True
+                        break
+                        
+                    elif action == "SELL" and tp_price > 0 and tick_now.ask <= (tp_price + min_dist):
+                        print(f"🚀 PROXIMITY PROFIT: Market ({tick_now.ask}) is too close to TP ({tp_price}) to anchor. Closing immediately.")
+                        close_req = {
+                            "action": mt5.TRADE_ACTION_DEAL,
+                            "position": result.order,
+                            "symbol": symbol,
+                            "volume": pos_check[0].volume,
+                            "type": mt5.ORDER_TYPE_BUY,
+                            "price": tick_now.ask,
+                            "magic": magic,
+                            "comment": "Proximity TP Close",
+                        }
+                        mt5.order_send(close_req)
+                        tp_anchored = True
+                        break
+                        
+                    # Also check if it's trapped against the Stop Loss
+                    elif sl_price > 0 and ((action == "BUY" and tick_now.bid <= (sl_price + min_dist)) or (action == "SELL" and tick_now.ask >= (sl_price - min_dist))):
+                        print(f"💥 PROXIMITY STOP: Market fell too close to SL ({sl_price}). Closing immediately to protect equity.")
                         close_req = {
                             "action": mt5.TRADE_ACTION_DEAL,
                             "position": result.order,
@@ -415,34 +444,15 @@ def execute_trade(signal_data):
                             "type": mt5.ORDER_TYPE_SELL if action == "BUY" else mt5.ORDER_TYPE_BUY,
                             "price": tick_now.bid if action == "BUY" else tick_now.ask,
                             "magic": magic,
-                            "comment": "Flash TP Close",
+                            "comment": "Proximity SL Close",
                         }
                         mt5.order_send(close_req)
                         tp_anchored = True
                         break
                         
-                    # Check if we blasted past SL
-                    if sl_price > 0 and ((action == "BUY" and tick_now.bid <= sl_price) or (action == "SELL" and tick_now.ask >= sl_price)):
-                        print(f"💥 FLASH STOPPED: Market fell past SL ({sl_price})! Closing immediately.")
-                        close_req = {
-                            "action": mt5.TRADE_ACTION_DEAL,
-                            "position": result.order,
-                            "symbol": symbol,
-                            "volume": pos_check[0].volume,
-                            "type": mt5.ORDER_TYPE_SELL if action == "BUY" else mt5.ORDER_TYPE_BUY,
-                            "price": tick_now.bid if action == "BUY" else tick_now.ask,
-                            "magic": magic,
-                            "comment": "Flash SL Close",
-                        }
-                        mt5.order_send(close_req)
-                        tp_anchored = True
-                        break
-                        
-                print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
-            else:
-                print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
+            print(f"⚠️ Modify Failed (Attempt {attempt+1}): {mod_result.comment} (Code: {mod_result.retcode})")
         else:
-            tp_anchored = True # No TP/SL requested, break loop
+            tp_anchored = True 
             break
 
     if not tp_anchored:
